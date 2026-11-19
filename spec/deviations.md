@@ -143,7 +143,7 @@ These are not fixed in the converter (design principle 1: never "fix" content). 
 | C5 | `convert --input input/ --sources sources.yaml` | Both are optional, but at least one is required | Allows converting only files or only web pages. | implemented |
 | C6 | A log file per run | `convert` → `output/run-<timestamp>.log`; `fetch` → `work/fetch-<timestamp>.log`; `specval run` → `validation/run-<timestamp>.log` | The design only names the `convert` log location. | implemented |
 | C8 | — | New command `specconv download-models [--force]` | Fetches the pinned Docling models (E8); needed once per machine and in the Docker image. | implemented |
-| C7 | — | Commands not built yet exit with code 1 and say "not implemented yet (phase N)" | Design principle 3: fail loudly, never pretend to succeed. Removed as each phase lands (`convert`: phase 2; `fetch`: phase 4; `specval run`: phase 5; `specval approve`: phase 6; `--split` still to come: phase 7). | implemented |
+| C7 | — | Commands not built yet exit with code 1 and say "not implemented yet (phase N)" | Design principle 3: fail loudly, never pretend to succeed. Removed as each phase lands (`convert`: phase 2; `fetch`: phase 4; `specval run`: phase 5; `specval approve`: phase 6; `--split`: phase 7). | implemented |
 
 ## Data formats
 
@@ -221,6 +221,19 @@ Pandoc only recognizes the paragraph style named exactly `Source Code` as code. 
 | TTML2 | pass on all nine checks (after Q21 and Q22); 5,959 sentences, 129 tables and 272 code blocks compared. |
 | SAMI | warn: only V7 (web images, one heading level jump in the source). |
 | CEA-608-E | fail, with genuine findings: V1 table count (FS-1), V2 stray "2." heading, V3 98.9% (contents rows and diagram text, see above), V4 two tokens, V5 13 cells not found and some extractor disagreements. |
+
+## Split (phase 7)
+
+| # | Design says | Implementation | Why | Status |
+| --- | --- | --- | --- | --- |
+| SP1 | One file per heading at the level | A section starts at every heading of that level **or higher** (a `#` heading also ends a `##` section); deeper headings stay inside | Otherwise the text under a higher heading would belong to the previous section's file. | implemented |
+| SP2 | File names like `07-3-2-pop-on-captions.md` | Numbered headings: the number with its first part zero-padded, then a slug of the title; unnumbered: `sNN-<slug>.md` by position; repeats get `-2`; names limited to 60 slug characters | Matches the design's example; position keeps unnumbered files in order. | implemented |
+| SP3 | Section front matter names the parent document and section number | `parent`, `parent_file` (`../<id>.md`), `section` (number or null), `title`, `level`, `order`; `index.md` has `parent`, `parent_file`, `split_level`, `sections` | Plain YAML; the shared front-matter schema is for whole documents. | implemented |
+| SP4 | Links to anchors in other sections are rewritten | Also relative paths (`media/…`) get `../`; links inside tables are rewritten (the cell text is unchanged), links inside fenced code and `<pre>` never; an unknown `#id` is left as it is | Section files sit one folder down; V7 reports unknown targets on the full document. | implemented |
+| SP5 | `index.md` | The text before the first section, then a nested list of links to the sections | One entry point per document. | implemented |
+| SP6 | — | `--split` is part of the options (and the manifest's options hash) only when given; converting again without it removes `sections/` | Existing outputs are not re-converted just because the option exists. | implemented |
+
+Real spec: TTML2 split at level 2 gives 42 section files and `index.md`; all 6,177 local links in them resolve (found and fixed while testing: Pandoc indents nested list content by 4 spaces, which must not be taken for code).
 
 ## Future scope (to be checked later)
 

@@ -241,11 +241,6 @@ def test_corrupt_manifest_exits_2(input_dir: Path) -> None:
     assert convert().exit_code == 2
 
 
-def test_split_not_yet_available(input_dir: Path) -> None:
-    result = convert("--split", "2")
-    assert result.exit_code == 2 and "phase 7" in result.output
-
-
 @pytest.mark.parametrize(
     "name, slug",
     [

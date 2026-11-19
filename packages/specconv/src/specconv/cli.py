@@ -185,8 +185,6 @@ def convert(
         raise _fail_config("give --input, --sources or both")
     if input is not None and not input.is_dir():
         raise _fail_config(f"--input {input}: not a folder")
-    if split is not None:
-        raise _fail_config("--split is not implemented yet (build phase 7)")
     cfg, srcs = _load(config, sources)
     try:
         previous = manifest_io.load_previous(output)
@@ -238,7 +236,7 @@ def convert(
         log.info("tool versions: %s", deps.tool_versions())
         for rel in scan.skipped:
             log.info("skipped (not a PDF, HTML or DOCX file): %s", rel)
-        pipeline = Pipeline(cfg, output, work, previous=previous, force=force)
+        pipeline = Pipeline(cfg, output, work, previous=previous, force=force, split=split)
         result = pipeline.run(docs, full_run=only is None)
         counts: dict[str, int] = {}
         for entry in result.processed:

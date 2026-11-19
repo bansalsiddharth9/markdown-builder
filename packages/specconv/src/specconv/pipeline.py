@@ -37,6 +37,7 @@ from importlib.metadata import version as dist_version
 from pathlib import Path
 from typing import Any
 
+import yaml
 from common.frontmatter import FrontMatter, FrontMatterError, render_document
 from common.manifest import Manifest, ManifestEntry
 
@@ -51,6 +52,7 @@ from specconv.frontmatter import carry_over, read_previous
 from specconv.htmlprep import OwnUrl, PreparedHtml, prepare_html
 from specconv.postprocess import PostprocessError, postprocess
 from specconv.routing import InputDoc, Route, route
+from specconv.split import split_sections
 from specconv.textlayer import FLAG_MIXED, PdfReadError, TextLayer, check_text_layer
 
 log = logging.getLogger("specconv.pipeline")
@@ -107,12 +109,14 @@ class Pipeline:
         work: Path,
         previous: Manifest | None = None,
         force: bool = False,
+        split: int | None = None,
     ) -> None:
         self.cfg = cfg
         self.output = output
         self.work = work
         self.previous = previous or Manifest()
         self.force = force
+        self.split = split  # --split LEVEL: also write sections/ (phase 7)
         self._pandoc: dict[str, PandocConverter] = {}
         self._docling: DoclingConverter | None = None
         self._fetched: dict[str, FetchOutcome] = {}  # web source id -> fetch used
@@ -148,6 +152,8 @@ class Pipeline:
             "strip_tags": strip_tags,
             "recipe_version": RECIPE_VERSION,
         }
+        if self.split is not None:
+            options["split"] = self.split
         if r.from_format == "html" and doc.rel_path is not None:
             # A changed own URL changes which links are rewritten.
             options["self_url"] = self.cfg.self_url_for(doc.rel_path)
@@ -416,6 +422,10 @@ class Pipeline:
             render_document(carried.front_matter, processed.markdown).encode("utf-8")
         )
         shutil.copyfile(doc.path, tmp / f"source{doc.path.suffix.lower()}")
+        if self.split is not None:
+            prepared.extra["split"] = _write_sections(
+                tmp, doc.id, md_name, processed.markdown, self.split
+            )
         conversion = {
             "id": doc.id,
             "tool": result.tool,
@@ -498,6 +508,33 @@ class Pipeline:
 def _page_list(pages: list[int], limit: int = 20) -> str:
     shown = ", ".join(map(str, pages[:limit]))
     return shown + (f" … ({len(pages) - limit} more)" if len(pages) > limit else "")
+
+
+def _with_meta(meta: dict[str, Any], body: str) -> bytes:
+    head = yaml.safe_dump(meta, sort_keys=False, allow_unicode=True)
+    return f"---\n{head}---\n{body}".encode()
+
+
+def _write_sections(tmp: Path, doc_id: str, md_name: str, markdown: str, level: int):
+    """sections/<file>.md per section and sections/index.md (design: --split)."""
+    result = split_sections(markdown, level)
+    folder = tmp / "sections"
+    folder.mkdir()
+    parent = f"../{md_name}"
+    for s in result.sections:
+        meta = {
+            "parent": doc_id,
+            "parent_file": parent,
+            "section": s.number,
+            "title": s.title,
+            "level": s.level,
+            "order": s.order,
+        }
+        (folder / s.filename).write_bytes(_with_meta(meta, s.body))
+    meta = {"parent": doc_id, "parent_file": parent, "split_level": level,
+            "sections": len(result.sections)}  # fmt: skip
+    (folder / "index.md").write_bytes(_with_meta(meta, result.index_body(doc_id)))
+    return {"level": level, "sections": [s.filename for s in result.sections]}
 
 
 def _swap_into_place(tmp: Path, final_dir: Path) -> None:
