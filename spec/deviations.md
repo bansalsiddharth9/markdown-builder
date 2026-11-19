@@ -251,6 +251,20 @@ Host sizing (design open question): one PDF worker needs about 6 GB of memory; t
 
 `README.md` covers setup (uv, Pandoc 3.14 in `.venv/bin`, Chromium in `.playwright/`, pinned models), daily use (convert, validate, review queue, approve, split), configuration, outputs, PDF limitations and development commands.
 
+## Web application core (phase 9)
+
+| # | Design says | Implementation | Why | Status |
+| --- | --- | --- | --- | --- |
+| WB1 | Workers load the Docling models once and keep them warm; every step runs in a subprocess with a timeout | Every step runs as `python -m specconv …` / `python -m specval …` in a subprocess (new `__main__` modules in both packages), so models are loaded once per job, not kept warm | The two design points conflict; robustness wins: a stuck or crashing converter is killed by its timeout and cannot take the worker down. Model loading adds a few seconds per PDF job. | implemented |
+| WB2 | Step timeout 15 minutes per document | Each step's timeout is 15 minutes times the number of documents (URLs for fetch) | One `convert` run handles all documents of a job. | implemented |
+| WB3 | Queue in `specweb.sqlite` | Huey's queue is in its own file, `data/queue.sqlite`; jobs and documents in `data/specweb.sqlite` (WAL mode, shared by web and worker) | Two libraries writing one SQLite file would contend for its lock. | implemented |
+| WB4 | Store uploads under generated names, never the user's file name | Stored name = a slug of the last path part of the uploaded name (`CTA 608-E.pdf` -> `cta-608-e.pdf`), unique per job; the original name is kept only in the database for display | Document ids come from file names; a slug is safe (no paths, ASCII only) and keeps ids readable. Content-type checks, size and count limits follow in phase 11. | implemented |
+| WB5 | `/api/documents/{doc_id}` (open question W-a) | Document ids are unique per job only, so document routes will be `/api/documents/{job_id}/{doc_id}` (phase 10) | W-a's proposed default. | decided |
+| WB6 | Upload form: choose static or browser per URL | One URL per line in a text box; add `browser` after a URL for a JavaScript-built page | No JavaScript needed for a per-row control. The API takes `urls` as a JSON list of `{url, render}`. | implemented |
+| WB7 | — | A failed fetch does not stop the job: `convert` records it as a failed document, the others are converted | Same rule as the command line: one bad document never stops the rest. | implemented |
+| WB8 | — | New command `specweb serve [--host --port --config]` and `specweb worker [--config]`; settings from `specweb.yaml` (strict) and `SPECWEB_DATA` / `SPECWEB_CONFIG` | Entry points for the Docker services in phase 11. | implemented |
+| WB9 | — | `scripts/licenses.py` reads a package's bundled LICENSE file when its metadata names no license (huey: MIT); htmx 2.0.4 (0BSD) is vendored as `static/htmx.min.js` and listed in LICENSES.md | huey 3.5.4 declares no license in its metadata. | implemented |
+
 ## Future scope (to be checked later)
 
 | # | Topic | Detail | Possible approach |
@@ -263,5 +277,5 @@ Host sizing (design open question): one PDF worker needs about 6 GB of memory; t
 
 | # | Topic | Proposed default | Status |
 | --- | --- | --- | --- |
-| W-a | Document ids are unique per job only; they clash in `/api/documents/{doc_id}` and `data/library/<doc_id>/` | API uses `<job_id>/<slug>`; re-approving a slug stores a new version in the library | open |
+| W-a | Document ids are unique per job only; they clash in `/api/documents/{doc_id}` and `data/library/<doc_id>/` | API uses `<job_id>/<slug>`; re-approving a slug stores a new version in the library | decided (WB5) |
 | W-b | DOCX preview needs Pandoc inside `specweb` | Treated as display only, not conversion logic | open |

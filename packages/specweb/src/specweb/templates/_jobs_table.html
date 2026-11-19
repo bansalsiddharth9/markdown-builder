@@ -1,0 +1,20 @@
+<div id="jobs-table"
+     {% if any_running %}hx-get="/jobs/table{% if status %}?status={{ status }}{% endif %}" hx-trigger="every 2s" hx-swap="outerHTML"{% endif %}>
+<table>
+  <thead><tr><th>Created</th><th>Job</th><th>By</th><th>Documents</th><th>Status</th><th>Validation</th></tr></thead>
+  <tbody>
+  {% for job in jobs %}
+    <tr>
+      <td>{{ job.created_at }}</td>
+      <td><a href="/jobs/{{ job.id }}">{{ job.id }}</a></td>
+      <td>{{ job.submitted_by or "" }}</td>
+      <td>{{ job.documents | length }}</td>
+      <td><span class="status s-{{ job.status }}">{{ job.status }}</span></td>
+      <td>{% if job.overall %}<span class="status s-{{ job.overall }}">{{ job.overall }}</span>{% endif %}</td>
+    </tr>
+  {% else %}
+    <tr><td colspan="6">No jobs yet.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>

@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block title %}Upload · Spec converter{% endblock %}
+{% block content %}
+<h1>Convert specifications</h1>
+<p class="notice">There are <strong>no accounts</strong>: every job is visible to everyone on the network.
+Converted files are for <strong>internal reference only</strong>.</p>
+{% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
+<form method="post" action="/jobs" enctype="multipart/form-data" class="upload">
+  <label>Files (PDF, HTML, DOCX)
+    <input type="file" name="files" multiple accept=".pdf,.html,.htm,.docx">
+  </label>
+  <label>Web pages, one URL per line; add <code>browser</code> after a URL for pages built by JavaScript
+    <textarea name="urls_text" rows="4" placeholder="https://www.w3.org/TR/ttml2/&#10;https://example.org/captions browser"></textarea>
+  </label>
+  <label>Also split into one file per heading of level (optional)
+    <select name="split">
+      <option value="">no split</option>
+      {% for level in range(1, 7) %}<option value="{{ level }}">{{ level }}</option>{% endfor %}
+    </select>
+  </label>
+  <label>Your name (optional, shown on the job and on approvals)
+    <input type="text" name="submitted_by" maxlength="200">
+  </label>
+  <button type="submit">Convert</button>
+</form>
+{% endblock %}

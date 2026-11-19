@@ -75,6 +75,12 @@ SYSTEM_TOOLS = [
         "downloaded by Playwright alongside Chromium; not used by specconv",
     ),
     ("uv", "0.13.9", "MIT OR Apache-2.0", "environment and lock file management"),
+    (
+        "htmx",
+        "2.0.4",
+        "0BSD",
+        "served by specweb as static/htmx.min.js (from unpkg.com/htmx.org@2.0.4)",
+    ),
     ("Python", "3.12", "PSF-2.0", "runtime"),
 ]
 
@@ -103,11 +109,37 @@ def _license_of(dist) -> str:
     if classifiers:
         return " OR ".join(NORMALIZE.get(c, c) for c in classifiers)
     raw = (meta.get("License") or "").strip()
-    return NORMALIZE.get(raw, raw.splitlines()[0][:60] if raw else "UNKNOWN")
+    if raw:
+        return NORMALIZE.get(raw, raw.splitlines()[0][:60])
+    return _license_from_file(dist)
+
+
+# Opening words of the common license texts, for packages whose metadata names
+# no license but which ship the license file (e.g. huey).
+LICENSE_TEXTS = {
+    "Permission is hereby granted, free of charge, to any person obtaining a copy": "MIT",
+    "Apache License": "Apache-2.0",
+    "Redistribution and use in source and binary forms, with or without": "BSD",
+}
+
+
+def _license_from_file(dist) -> str:
+    for file in dist.files or []:
+        if "LICEN" not in file.name.upper() and "COPYING" not in file.name.upper():
+            continue
+        try:
+            text = " ".join(Path(dist.locate_file(file)).read_text(errors="replace").split())
+        except OSError:
+            continue
+        for words, spdx in LICENSE_TEXTS.items():
+            if words in text:
+                return f"{spdx} (from {file.name})"
+    return "UNKNOWN"
 
 
 def _license_ids(expression: str) -> set[str]:
     """Split an SPDX-like expression into license ids (ignoring AND/OR/WITH)."""
+    expression = re.sub(r"\s*\(from [^)]*\)", "", expression)
     parts = re.split(r"\s+(?:AND|OR|WITH)\s+|[(),;]", expression)
     return {NORMALIZE.get(p.strip(), p.strip()) for p in parts if p.strip()}
 

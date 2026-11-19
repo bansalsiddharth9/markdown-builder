@@ -5,6 +5,20 @@ from pathlib import Path
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+FIXTURE_SCRIPT = REPO_ROOT / "tests" / "fixtures" / "make_fixtures.py"
+
+
+@pytest.fixture(scope="session")
+def fixture_mod() -> dict:
+    import runpy
+
+    return runpy.run_path(str(FIXTURE_SCRIPT))
+
+
+@pytest.fixture(scope="session")
+def fixtures(tmp_path_factory: pytest.TempPathFactory, fixture_mod: dict) -> dict[str, Path]:
+    """Synthetic fixture files, generated once per test session."""
+    return fixture_mod["build_all"](tmp_path_factory.mktemp("fixtures"))
 
 
 @pytest.fixture

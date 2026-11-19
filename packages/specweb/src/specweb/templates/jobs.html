@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block title %}Jobs · Spec converter{% endblock %}
+{% block content %}
+<h1>Jobs</h1>
+<form method="get" action="/jobs" class="filter">
+  <label>Status
+    <select name="status" onchange="this.form.submit()">
+      <option value="">all</option>
+      {% for s in statuses %}<option value="{{ s }}" {% if s == status %}selected{% endif %}>{{ s }}</option>{% endfor %}
+    </select>
+  </label>
+</form>
+{% include "_jobs_table.html" %}
+{% endblock %}

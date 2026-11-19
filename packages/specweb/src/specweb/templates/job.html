@@ -1,0 +1,7 @@
+{% extends "base.html" %}
+{% block title %}Job {{ job.id }} · Spec converter{% endblock %}
+{% block content %}
+<h1>Job {{ job.id }}</h1>
+<p>Submitted {{ job.created_at }}{% if job.submitted_by %} by {{ job.submitted_by }}{% endif %}{% if job.options.split %} · split at level {{ job.options.split }}{% endif %}</p>
+{% include "_job_documents.html" %}
+{% endblock %}
