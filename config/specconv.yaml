@@ -4,7 +4,7 @@ pdf:
   min_text_page_ratio: 0.7    # below this share of text pages: no_text_layer, not converted
   models_path: ../models      # pinned Docling models (specconv download-models), relative to this file
 html:
-  strip_tags: [script, style, noscript]
+  strip_tags: [script, style, noscript, template]   # template: never displayed by browsers
 fetch:
   timeout_s: 30
   retries: 3

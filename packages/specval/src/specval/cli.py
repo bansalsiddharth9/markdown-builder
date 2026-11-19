@@ -6,14 +6,17 @@ or missing system dependency.
 
 from __future__ import annotations
 
+import datetime as dt
+import logging
 from pathlib import Path
 from typing import Annotated
 
 import typer
 from common.manifest import Manifest, ManifestError, read_manifest
 
-from specval import __version__, deps
+from specval import __version__, deps, runner
 from specval.config import ConfigError, load_acceptance, load_config
+from specval.report import write_json, write_markdown, write_summary
 from specval.runlog import run_logging, run_timestamp
 
 EXIT_OK = 0
@@ -94,18 +97,49 @@ def run(
     if doc is not None and manifest.get(doc) is None:
         raise _fail_config(f"--doc {doc!r}: not in {output / 'manifest.json'}")
 
+    entries = [e for e in manifest.entries if doc is None or e.id == doc]
+    now = dt.datetime.now(dt.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    reports = []
     with run_logging(validation / f"run-{run_timestamp()}.log", verbose) as log:
         log.info(
             "specval %s run: output=%s documents=%d acceptance questions=%d",
             __version__,
             output,
-            len(manifest.entries),
+            len(entries),
             len(questions),
         )
         log.debug("config: %s", cfg)
-        log.debug("tool versions: %s", deps.tool_versions())
-        log.error("run is not implemented yet (build phases 5-6)")
-    raise typer.Exit(EXIT_FAILED)
+        log.info("tool versions: %s", deps.tool_versions())
+        for entry in entries:
+            report = runner.validate_document(entry, output, cfg, now)
+            reports.append(report)
+            write_json(report, validation)
+            write_markdown(report, validation)
+            statuses = " ".join(
+                f"{c.id}={c.status}" for c in report.checks if c.status != "not_run"
+            )
+            level = logging.ERROR if report.is_failure else logging.INFO
+            log.log(
+                level,
+                "%s: %s%s (%.1f s)",
+                entry.id,
+                report.overall,
+                f" [{statuses}]" if statuses else "; " + "; ".join(report.notes),
+                report.duration_s,
+            )
+        summary = write_summary(
+            reports, validation, keep_others={e.id for e in manifest.entries} if doc else None
+        )
+        counts: dict[str, int] = {}
+        for report in reports:
+            counts[report.overall] = counts.get(report.overall, 0) + 1
+        log.info(
+            "done: %s; reports in %s, summary %s",
+            ", ".join(f"{n} {s}" for s, n in sorted(counts.items())) or "no documents",
+            validation,
+            summary,
+        )
+    raise typer.Exit(EXIT_FAILED if any(r.is_failure for r in reports) else EXIT_OK)
 
 
 @app.command()

@@ -145,3 +145,14 @@ def test_nav_id_survives_preparation_and_conversion(tmp_path: Path) -> None:
     src.write_text(prepared.html, encoding="utf-8")
     md = PandocConverter("html").convert(src, tmp_path / "out").markdown
     assert_every_link_resolves(md)
+
+
+def test_table_classes_and_styles_not_written_after_caption(gfm) -> None:
+    """GFM has no table attributes; Pandoc would write "Caption {.common style=…}"."""
+    md = gfm(
+        '<a href="#t">t</a><table id="t" class="common" style="width: 5px">'
+        "<caption>Table 5-1 – Namespaces</caption><tr><th>A</th></tr><tr><td>1</td></tr></table>"
+    )
+    assert "{" not in md and "common" not in md and "width" not in md
+    assert "Table 5-1 – Namespaces\n" in md
+    assert_every_link_resolves(md)

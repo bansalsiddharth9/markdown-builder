@@ -10,6 +10,14 @@
   of that table (rowspan/colspan), so a merged cell's text is never repeated
   into the cells it covers. Other tables stay pipe tables, written by
   Docling's default Markdown table serializer.
+- Tables Docling labels as a document index (table of contents, list of
+  tables or figures) are written as a bullet list, one entry per row, with
+  the text exactly as in the PDF, dot leaders and page numbers included
+  (deviations Q20).
+- Text Docling classifies as a formula is not decoded (that needs another
+  model); Docling would write ``<!-- formula-not-decoded -->`` and lose it.
+  Its original text from the PDF is written instead, as a code block, so
+  characters like ``<`` and ``[`` stay exact (deviations Q18).
 - The Docling document is also saved as JSON for debugging.
 - Text Docling classifies as page header or footer ("furniture") is left out
   of the Markdown, as Docling does; it is listed in conversion.json so a
@@ -21,6 +29,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import time
 from importlib.metadata import version as dist_version
 from pathlib import Path
@@ -32,12 +41,36 @@ from specconv.models import PINNED_MODELS, missing_models
 IMAGES_SCALE = 2.0  # picture images rendered at 144 dpi (Docling's default 1.0 is 72 dpi)
 
 
+def is_document_index(item: Any) -> bool:
+    """A table Docling labels as a document index (contents list)."""
+    return getattr(item.label, "value", item.label) == "document_index"
+
+
 def table_has_spans(item: Any) -> bool:
     return any(c.row_span > 1 or c.col_span > 1 for c in item.data.table_cells)
 
 
+_MD_SPECIAL = re.compile(r"([\\`*_\[\]<>])")
+
+
+def index_as_list(item: Any) -> str:
+    """A document index (contents list) as a Markdown bullet list: the cells of
+    each row joined by a space, Markdown characters escaped."""
+    rows: dict[int, list[tuple[int, str]]] = {}
+    for cell in item.data.table_cells:
+        text = " ".join(cell.text.split())
+        if text:
+            rows.setdefault(cell.start_row_offset_idx, []).append((cell.start_col_offset_idx, text))
+    lines = []
+    for r in sorted(rows):
+        entry = " ".join(text for _, text in sorted(rows[r]))
+        lines.append("- " + _MD_SPECIAL.sub(r"\\\1", entry))
+    return "\n".join(lines)
+
+
 def _span_aware_table_serializer() -> Any:
-    """A Markdown table serializer that writes merged-cell tables as HTML."""
+    """A Markdown table serializer that writes merged-cell tables as HTML and
+    document indexes as bullet lists."""
     from docling_core.transforms.serializer.base import SerializationResult
     from docling_core.transforms.serializer.common import create_ser_result
     from docling_core.transforms.serializer.markdown import MarkdownTableSerializer
@@ -46,6 +79,12 @@ def _span_aware_table_serializer() -> Any:
         def serialize(self, *, item, doc_serializer, doc, **kwargs) -> SerializationResult:
             nested = kwargs.get("_nested_in_table")
             excluded = item.self_ref in doc_serializer.get_excluded_refs(**kwargs)
+            if not nested and not excluded and is_document_index(item):
+                caption = doc_serializer.serialize_captions(item=item, **kwargs).text
+                text = index_as_list(item)
+                return create_ser_result(
+                    text=f"{caption}\n\n{text}" if caption else text, span_source=item
+                )
             if nested or excluded or not table_has_spans(item):
                 return super().serialize(
                     item=item, doc_serializer=doc_serializer, doc=doc, **kwargs
@@ -58,6 +97,35 @@ def _span_aware_table_serializer() -> Any:
             return create_ser_result(text=html, span_source=item)
 
     return SpanAwareTableSerializer()
+
+
+def _formula_text_serializer() -> Any:
+    """Markdown text serializer that writes undecoded formulas as their original
+    text in a code block (inline: code span) instead of a placeholder comment."""
+    from docling_core.transforms.serializer.common import create_ser_result
+    from docling_core.transforms.serializer.markdown import (
+        MarkdownTextSerializer,
+        _code_block,
+        _code_span,
+    )
+    from docling_core.types.doc import FormulaItem
+
+    class FormulaAsTextSerializer(MarkdownTextSerializer):
+        def serialize(self, *, item, doc_serializer, doc, is_inline_scope=False, **kwargs):
+            if isinstance(item, FormulaItem) and not item.text and item.orig:
+                if item.self_ref in doc_serializer.get_excluded_refs(**kwargs):
+                    return create_ser_result()
+                text = _code_span(item.orig) if is_inline_scope else _code_block(item.orig)
+                return create_ser_result(text=text, span_source=item)
+            return super().serialize(
+                item=item,
+                doc_serializer=doc_serializer,
+                doc=doc,
+                is_inline_scope=is_inline_scope,
+                **kwargs,
+            )
+
+    return FormulaAsTextSerializer()
 
 
 class _WarningCollector(logging.Handler):
@@ -123,6 +191,8 @@ class DoclingConverter:
             "images_scale": IMAGES_SCALE,
             "image_export_mode": "referenced",
             "merged_cell_tables": "html",
+            "undecoded_formulas": "original text as code",
+            "document_index": "bullet list",
             "models": {m.repo_id: m.revision for m in PINNED_MODELS},
         }
 
@@ -186,6 +256,7 @@ class DoclingConverter:
         )
         serializer = MarkdownDocSerializer(
             doc=doc,
+            text_serializer=_formula_text_serializer(),
             table_serializer=_span_aware_table_serializer(),
             params=MarkdownParams(image_mode=ImageRefMode.REFERENCED),
         )
@@ -211,7 +282,15 @@ class DoclingConverter:
             details={
                 "pages": len(doc.pages),
                 "tables": len(doc.tables),
-                "tables_as_html": sum(1 for t in doc.tables if table_has_spans(t)),
+                "tables_as_html": sum(
+                    1 for t in doc.tables if not is_document_index(t) and table_has_spans(t)
+                ),
+                "document_index_as_list": sum(1 for t in doc.tables if is_document_index(t)),
+                "formulas_as_text": sum(
+                    1
+                    for t in doc.texts
+                    if getattr(t.label, "value", t.label) == "formula" and not t.text and t.orig
+                ),
                 "pictures": len(doc.pictures),
                 "dropped_as_page_furniture": furniture,
             },

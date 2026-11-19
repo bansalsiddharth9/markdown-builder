@@ -37,7 +37,8 @@ class PdfConfig:
 
 @dataclass(frozen=True)
 class HtmlConfig:
-    strip_tags: tuple[str, ...] = ("script", "style", "noscript")
+    # <template> content is never displayed by browsers (deviations Q19).
+    strip_tags: tuple[str, ...] = ("script", "style", "noscript", "template")
 
 
 @dataclass(frozen=True)

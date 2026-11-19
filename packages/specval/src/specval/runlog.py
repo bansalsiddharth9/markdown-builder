@@ -30,9 +30,13 @@ def run_logging(log_file: Path, verbose: bool = False) -> Iterator[logging.Logge
     console.setFormatter(logging.Formatter("%(levelname)s: %(message)s"))
     logger.addHandler(file_handler)
     logger.addHandler(console)
+    # The Markdown linter adds a handler to the root logger; without this every
+    # message would be printed twice.
+    propagate, logger.propagate = logger.propagate, False
     try:
         yield logger
     finally:
+        logger.propagate = propagate
         for handler in (file_handler, console):
             logger.removeHandler(handler)
             handler.close()

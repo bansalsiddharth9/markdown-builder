@@ -75,6 +75,10 @@ The design chose option C (Lua filter writing `<a id>` anchors on the heading li
 | Q14 | — | HTML preparation replaces every table with exactly one cell by its caption (as a paragraph) followed by the cell's contents. Ids on the table, its rows or the cell move to empty `<a id>` anchors. | W3C specs draw a box around each example with a one-cell table; inside a table cell an example cannot be a code block. Decided by the user (option B, 2026-11-19). The validator must apply the same rule when counting tables (V1). | implemented |
 | Q15 | — | A `<pre>` without a `<code>` inside gets one before conversion | Pandoc 3.14's HTML reader writes a bare `<pre>` as plain text with `<br />` line breaks, not as a code block, wherever it is. TTML2 (272) and SAMI (16) use bare `<pre>`. | implemented |
 | Q16 | — | The anchors filter writes code blocks that have no language, class or id as fenced blocks itself (the fence is longer than any backtick run in the code) | Pandoc's GFM writer writes such blocks as indented code. DOCX "Source Code" paragraphs are now fenced too. | implemented |
+| Q17 | — | The anchors filter clears a table's classes and styles too, not only its id | Pandoc's GFM writer printed them after the caption as text: `Table 5-1 – Namespaces {.common}` (25 tables in TTML2). Found by V4 in phase 5. | implemented |
+| Q18 | — | Text Docling labels as a formula but cannot decode (its formula model is not used) is written as its original PDF text in a code block, instead of Docling's `<!-- formula-not-decoded -->`; counted in `conversion.json` as `docling.formulas_as_text` | **Content loss found by V4:** on CEA-608-E page 41 the URL syntax `<url>[attr1:val1]…[checksum]` and its example were replaced by the placeholder. A code block keeps `<` and `[` exact. | implemented |
+| Q19 | `clean: none` removes only `<script>`, `<style>`, `<noscript>` | `<template>` is removed too (default `html.strip_tags`) | Browsers never display `<template>` content. The saved TTML2 page contained an Adobe Acrobat extension's button ("AI Assistant") inside one, which Pandoc converted into 5 icons and text. Found by V1 (image count). | implemented |
+| Q20 | — | Tables Docling labels as a document index (table of contents, list of tables, list of figures) are written as a bullet list, one entry per row, text exactly as in the PDF (dot leaders and page numbers kept, Markdown characters escaped); counted in `conversion.json` as `docling.document_index_as_list` | Decided by the user (2026-11-19): the contents pages of CEA-608-E (PDF pages 6–13) came out as 8 one-column tables. Real tables are unaffected. | implemented |
 
 
 ### Code examples inside table cells (TTML2): resolved (Q14, Q15, Q16)
@@ -137,7 +141,7 @@ These are not fixed in the converter (design principle 1: never "fix" content). 
 | C5 | `convert --input input/ --sources sources.yaml` | Both are optional, but at least one is required | Allows converting only files or only web pages. | implemented |
 | C6 | A log file per run | `convert` → `output/run-<timestamp>.log`; `fetch` → `work/fetch-<timestamp>.log`; `specval run` → `validation/run-<timestamp>.log` | The design only names the `convert` log location. | implemented |
 | C8 | — | New command `specconv download-models [--force]` | Fetches the pinned Docling models (E8); needed once per machine and in the Docker image. | implemented |
-| C7 | — | Commands not built yet exit with code 1 and say "not implemented yet (phase N)" | Design principle 3: fail loudly, never pretend to succeed. Removed as each phase lands (`convert`: phase 2; `fetch`: phase 4; `--split` exits 2 until phase 7). | implemented |
+| C7 | — | Commands not built yet exit with code 1 and say "not implemented yet (phase N)" | Design principle 3: fail loudly, never pretend to succeed. Removed as each phase lands (`convert`: phase 2; `fetch`: phase 4; `specval run`: phase 5; `specval approve` and `--split` still to come: phases 6 and 7). | implemented |
 
 ## Data formats
 
@@ -149,17 +153,48 @@ These are not fixed in the converter (design principle 1: never "fix" content). 
 | D4 | `acceptance.yaml` `expect` values | `expect` must be a quoted string; unquoted numbers are rejected with a message | YAML reads unquoted `0x25` as 37 and `1.10` as 1.1, which would silently check for the wrong text. | implemented |
 | D5 | `sources.yaml` `id` names the output folder | Ids may only contain letters, digits, `.`, `_`, `-` and must start with a letter or digit; `drop_selectors` is only allowed with `clean: main-content` | Ids become folder names, so `../x` must be impossible; a selector list that is never applied is a config mistake. | implemented |
 
-## Validator rules still open (affect phases 5 and 6)
+## Validator (phase 5)
 
-| # | Topic | Proposed default | Status |
+Rules V-a to V-g were open; each was implemented with its proposed default (design: "use the default and list the question in the phase summary"). V-h to V-r were decided while building and running phase 5.
+
+| # | Topic | Implementation | Why | Status |
+| --- | --- | --- | --- | --- |
+| V-a | V4 hex pattern `[0-9A-Fa-f]{2,4}h` matched words like "each"; 4-digit hex matches years | Whole words only, with at least one digit; the 4-digit family only counts table cells | As proposed. | implemented |
+| V-b | "shall not" also contains "shall" | Longest match wins: "shall not", "should not", "must not" are one token each | As proposed. | implemented |
+| V-c | "may" also matches the month | Kept as designed | Both sides are counted the same way, so a month only matters if it is lost. | implemented |
+| V-d | PDF running headers, footers and page numbers inflate source counts | Left out of the PDF text: lines that repeat unchanged on more than half the pages, and lines whose number follows the page number ("Page 12") on more than half the pages | The proposed "digits ignored" rule also removed real lines such as "Table 3 text"; tying the number to the page avoids that. CEA-608-E: 550 lines left out. | implemented |
+| V-e | V2 for PDFs (no source headings) | Only checks that the Markdown numbering is in order | As proposed. | implemented |
+| V-f | DOCX code blocks | A paragraph style whose name contains "code" or "source", or a paragraph whose runs are all in a monospace font (Courier, Consolas, Menlo, Monaco, Source Code, Lucida Console); consecutive ones form one block | As proposed. **Note:** Pandoc only treats the exact style `Source Code` as code, so a DOCX using e.g. a "Code Block" style will fail V1 (its code is converted as normal paragraphs). That is a real loss of code formatting; see the open question below. | implemented |
+| V-g | One-cell tables and bare `<pre>` (Q14, Q15) | V1 does not count tables with exactly one cell (source and Markdown); every `<pre>` is a code block | As proposed; matches what the converter does. | implemented |
+| V-h | "4-digit byte pairs inside tables" for PDFs | Not compared for PDFs (shown as not applicable in the details) | The PDF text has no reliable table structure, so the family compared phone numbers, years and statistics (CEA-608-E: 8 false differences). V5 (phase 6) compares PDF table cells with pdfplumber instead. | implemented |
+| V-i | V4 for PDFs: pypdf runs a table row's cells together ("25 % %") | Markdown table rows are joined the same way before V4 compares PDF documents | Otherwise every "number + unit" split across two cells is a false difference. | implemented |
+| V-j | V1 images | `<svg>` drawings (outermost only) count as images, as `<img>` does | Pandoc converts an inline `<svg>` into an image (a `data:` URI). | implemented |
+| V-k | V7 valid `#…` targets | Every `id` in raw HTML in the Markdown is a valid target (not only `<a>`, `<span>` and table elements), plus GitHub-style heading slugs | A browser jumps to any element with that id. | implemented |
+| V-l | V7 media | A local image or `media/` link to a missing file fails; an image that is still a web link warns ("not stored locally") | Phase 4 downloads images, so a web image is either from a local HTML file or a failed download. | implemented |
+| V-m | V7 front matter | Also fails when the front matter `id` is not the folder's id, or `source_sha256` does not match `source.<ext>` | Catches a Markdown file paired with the wrong source. | implemented |
+| V-n | V7 lint | pymarkdownlnt with style rules off that the converters' output breaks by design (raw HTML, line length, several top-level headings, Docling's flat `##`, and MD051 because it does not know `<a id>` anchors). Files over 10,000 lines are not linted, and the report says so | The linter's time grows about with the square of the length: 1,757 lines 5 s, 4,350 lines 27 s; TTML2 (24,519 lines) would take about 15 minutes. Lint only warns. | implemented |
+| V-o | Exit code of `specval run` | 1 if any document fails, or its conversion failed (`failed`, `no_text_layer`); `unsupported` documents are reported but do not fail the run | Same rule as `specconv convert`. | implemented |
+| V-p | Documents not converted | Reported with overall status `not_converted`, the conversion error, and no checks | There is nothing to compare. | implemented |
+| V-q | Checks of phase 6 | Shown as `not_run` in reports and `summary.csv` until phase 6 | Never pretend a check passed. | implemented |
+| V-r | `specval run --doc ID` | Rewrites that document's reports and its `summary.csv` row; other rows are kept | Otherwise one document's re-check would erase the others from the summary. | implemented |
+
+### Open question: DOCX code styles
+
+Pandoc only recognizes the paragraph style named exactly `Source Code` as code. DOCX specs that use another code style (e.g. "Code Block", "HTML Preformatted") or just a monospace font come out as normal paragraphs, which V1 reports as missing code blocks. The converter could map those styles to code before Pandoc runs (for example with a Lua filter on the `custom-style` attribute). None of the current real specs is a DOCX, so this has not been seen yet.
+
+### Real specs (phase 5)
+
+| Spec | Result | Findings |
+| --- | --- | --- |
+| TTML2 | pass (V1, V2, V4, V7) | Before the fixes above it failed: 5 extra images (Q19) and caption attribute text (Q17). |
+| SAMI | warn | 9 images that exist only on the web; one heading level jump (1 to 3) that is in the source. |
+| CEA-608-E | fail | Table count: Markdown 70 (after Q20), pdfplumber 72; checked by the user, no table missing (FS-1). Real things to review: a "2. Text and XDS" heading inside Annex E that is probably a list item; one table where Docling merged two rows ("63 64 c d c d"); pypdf reads `attr 1:val1` with a space where Docling has none. Before Q18 it also reported the lost URL syntax on page 41. |
+
+## Future scope (to be checked later)
+
+| # | Topic | Detail | Possible approach |
 | --- | --- | --- | --- |
-| V-a | V4 hex pattern `[0-9A-Fa-f]{2,4}h` also matches words like "each"; 4-digit hex matches years like "2020" | Whole words only, and require at least one digit | open |
-| V-b | V4 "shall not" also contains "shall" | Longest match wins; counted once, as "shall not" | open |
-| V-c | V4 "may" also matches the month | Keep as designed; report in the phase summary | open |
-| V-d | PDF running headers, footers and page numbers inflate V3/V4 source counts | Remove lines that repeat on more than half the pages before comparing | open |
-| V-e | V2 for PDFs (no source headings) | Check only that Markdown numbering is in sequence | open |
-| V-f | DOCX code blocks: which styles count as code | Style name containing "code" or "source", or a monospace font (Courier, Consolas, Menlo, Source Code), configurable | open |
-| V-g | V1/V6 for HTML after Q14/Q15: one-cell tables no longer exist in the output, and a bare `<pre>` is code | V1 skips source tables with exactly one cell; V6 counts every `<pre>` as a code block | open |
+| FS-1 | V1 table count for PDFs is misleading | pdfplumber, the second PDF reader, counts diagrams with drawn boxes as tables and cannot see tables without ruled lines. CEA-608-E: it finds 4 "tables" in Figures 2, 7 and 8 (PDF pages 26, 101, 104; all cells empty) and misses the two abbreviation lists (pages 18–19), so V1 reports 72 against the Markdown's 70 and fails although no table is missing (checked by the user, 2026-11-19). V1 also gives only the totals, not where they differ. | Report the pages where the counts differ; ignore pdfplumber tables whose cells are all empty or that lie on a Docling picture; reconsider in phase 6 together with V5, which pairs tables by page. |
 
 ## Web application still open (affect phases 9 to 11)
 

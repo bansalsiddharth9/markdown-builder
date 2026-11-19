@@ -323,3 +323,15 @@ def test_downloaded_images_copied_into_media(tmp_path: Path) -> None:
     assert 'src="https://ex.org/spec/other.png"' in result.html
     assert result.images_copied == ["m/fig.png"] and (tmp_path / "m/fig.png").read_bytes() == b"png"
     assert result.images_downloaded == 2 and result.images_remote == 1
+
+
+def test_template_removed_with_default_strip_tags(tmp_path: Path) -> None:
+    """<template> content is never displayed (deviations Q19), e.g. a browser
+    extension's button saved with the page."""
+    from specconv.config import HtmlConfig
+
+    html = "<p>Text</p><template><div>AI Assistant</div><svg></svg></template>"
+    result = prepare_html(
+        html.encode(), strip_tags=HtmlConfig().strip_tags, media_dir=tmp_path / "m"
+    )
+    assert "AI Assistant" not in result.html and result.removed == {"template": 1}

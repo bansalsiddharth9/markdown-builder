@@ -17,7 +17,7 @@ def test_repo_config_files_load(repo_root: Path) -> None:
     cfg = load_config(repo_root / "config/specconv.yaml")
     assert cfg.pdf.min_chars_per_page == 50
     assert cfg.pdf.min_text_page_ratio == 0.7
-    assert cfg.html.strip_tags == ("script", "style", "noscript")
+    assert cfg.html.strip_tags == ("script", "style", "noscript", "template")
     assert cfg.fetch == FetchConfig(
         timeout_s=30.0,
         retries=3,

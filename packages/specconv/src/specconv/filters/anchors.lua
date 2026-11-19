@@ -181,7 +181,9 @@ end
 local function Table(tbl)
   local ids = {}
   local id = tbl.identifier
-  tbl.identifier = "" -- otherwise GFM writes "Caption {#id}" literally
+  -- GFM has no table attributes: Pandoc would write the id, classes and styles
+  -- after the caption ("Caption {#id .common style=...}"), so all are cleared.
+  tbl.attr = pandoc.Attr("", {}, {})
   if is_targeted(id) then
     ids[#ids + 1] = id
   end

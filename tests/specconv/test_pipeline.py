@@ -95,7 +95,7 @@ def test_output_layout_and_manifest(input_dir: Path) -> None:
 
     conversion = json.loads((html_dir / "conversion.json").read_text(encoding="utf-8"))
     assert conversion["tool"] == "pandoc" and conversion["media"] == ["media/safe-area.png"]
-    assert conversion["options"]["strip_tags"] == ["script", "style", "noscript"]
+    assert conversion["options"]["strip_tags"] == ["script", "style", "noscript", "template"]
 
 
 def test_front_matter(input_dir: Path) -> None:
