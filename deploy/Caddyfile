@@ -1,0 +1,12 @@
+# HTTPS with Caddy's internal certificate authority (design: Transport).
+# Install Caddy's root certificate on clients, or replace "tls internal"
+# with the company's certificate files.
+{$SPECWEB_HOST:localhost} {
+	tls internal
+	encode gzip
+	# 20 files of up to 100 MB per job (specweb.yaml limits)
+	request_body {
+		max_size 2100MB
+	}
+	reverse_proxy web:8000
+}

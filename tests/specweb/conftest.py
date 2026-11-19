@@ -50,7 +50,15 @@ class FakeRunner:
             raise StepTimeout(f"{step} did not finish within {timeout:g} s")
         if step == self.fail_step:
             return 2
-        opts = dict(zip(args[1::2], args[2::2], strict=False))
+        opts: dict[str, str] = {}
+        i = 1
+        while i < len(args):  # options with values, and flags such as --block-private-addresses
+            if i + 1 < len(args) and not args[i + 1].startswith("--"):
+                opts[args[i]] = args[i + 1]
+                i += 2
+            else:
+                opts[args[i]] = ""
+                i += 1
         if step == "convert":
             self.convert(opts)
         elif step == "run":

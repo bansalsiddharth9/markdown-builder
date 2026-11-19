@@ -35,6 +35,13 @@ def serve(
     config: ConfigOpt = None,
     host: Annotated[str, typer.Option(help="Address to listen on.")] = "127.0.0.1",
     port: Annotated[int, typer.Option(help="Port.")] = 8000,
+    forwarded_allow_ips: Annotated[
+        str,
+        typer.Option(
+            help="Proxies whose X-Forwarded-For is trusted for the client address "
+            "(per-client limits); '*' inside Docker, where only the proxy can connect."
+        ),
+    ] = "127.0.0.1",
 ) -> None:
     """Run the web server (put a reverse proxy with HTTPS in front of it)."""
     import uvicorn
@@ -42,7 +49,13 @@ def serve(
     cfg = _load(config)
     from specweb.app import create_app
 
-    uvicorn.run(create_app(cfg), host=host, port=port, proxy_headers=True)
+    uvicorn.run(
+        create_app(cfg),
+        host=host,
+        port=port,
+        proxy_headers=True,
+        forwarded_allow_ips=forwarded_allow_ips,
+    )
 
 
 @app.command()

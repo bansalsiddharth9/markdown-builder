@@ -49,6 +49,11 @@ class FetchConfig:
     # Where Playwright's Chromium is installed. Relative paths are resolved
     # against the config file's folder. None = Playwright's default location.
     browsers_path: Path | None = None
+    # Refuse private, loopback and link-local addresses, also after redirects and
+    # for page images (the web app sets this; deviations F17). Hosts in
+    # allow_hosts are allowed anyway.
+    block_private_addresses: bool = False
+    allow_hosts: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -181,8 +186,14 @@ def load_config(path: Path | None = None) -> SpecconvConfig:
 
     fetch_d = _mapping(data.get("fetch"), f"{path}: fetch")
     _reject_unknown(
-        fetch_d, {"timeout_s", "retries", "user_agent", "browsers_path"}, f"{path}: fetch"
-    )
+        fetch_d,
+        {"timeout_s", "retries", "user_agent", "browsers_path", "block_private_addresses",
+         "allow_hosts"},
+        f"{path}: fetch",
+    )  # fmt: skip
+    block = fetch_d.get("block_private_addresses", False)
+    if not isinstance(block, bool):
+        raise ConfigError(f"{path}: fetch.block_private_addresses: expected true or false")
     browsers_path = None
     if fetch_d.get("browsers_path") is not None:
         browsers_path = base / _str(fetch_d["browsers_path"], f"{path}: fetch.browsers_path")
@@ -197,6 +208,10 @@ def load_config(path: Path | None = None) -> SpecconvConfig:
             fetch_d.get("user_agent", FetchConfig.user_agent), f"{path}: fetch.user_agent"
         ),
         browsers_path=browsers_path.resolve() if browsers_path else None,
+        block_private_addresses=block,
+        allow_hosts=_str_list(fetch_d["allow_hosts"], f"{path}: fetch.allow_hosts")
+        if "allow_hosts" in fetch_d
+        else (),
     )
     self_urls: dict[str, str] = {}
     for name, url in _mapping(data.get("self_urls"), f"{path}: self_urls").items():

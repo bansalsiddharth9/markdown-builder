@@ -6,6 +6,7 @@ or missing system dependency.
 
 from __future__ import annotations
 
+import dataclasses
 from pathlib import Path
 from typing import Annotated
 
@@ -45,6 +46,28 @@ OnlyOpt = Annotated[
     str | None, typer.Option("--only", help="Process only the document with this id.")
 ]
 VerboseOpt = Annotated[bool, typer.Option("--verbose", "-v", help="Also show debug messages.")]
+BlockOpt = Annotated[
+    bool,
+    typer.Option(
+        "--block-private-addresses",
+        help="Refuse private, loopback and link-local addresses (also after redirects).",
+    ),
+]
+AllowHostOpt = Annotated[
+    list[str] | None,
+    typer.Option("--allow-host", help="Host allowed despite --block-private-addresses."),
+]
+
+
+def _with_guard(cfg: SpecconvConfig, block: bool, allow: list[str] | None) -> SpecconvConfig:
+    if not block and not allow:
+        return cfg
+    fetch_cfg = dataclasses.replace(
+        cfg.fetch,
+        block_private_addresses=block or cfg.fetch.block_private_addresses,
+        allow_hosts=tuple(cfg.fetch.allow_hosts) + tuple(allow or ()),
+    )
+    return dataclasses.replace(cfg, fetch=fetch_cfg)
 
 
 def _fail_config(message: str) -> typer.Exit:
@@ -101,9 +124,12 @@ def fetch(
     ] = False,
     only: OnlyOpt = None,
     verbose: VerboseOpt = False,
+    block_private_addresses: BlockOpt = False,
+    allow_host: AllowHostOpt = None,
 ) -> None:
     """Download the web pages listed in sources.yaml into the fetch cache."""
     cfg, srcs = _load(config, sources)
+    cfg = _with_guard(cfg, block_private_addresses, allow_host)
     _only_known(only, srcs, sources)
     selected = [s for s in srcs if only is None or s.id == only]
     _check_dependencies(
@@ -179,6 +205,8 @@ def convert(
     ] = False,
     only: OnlyOpt = None,
     verbose: VerboseOpt = False,
+    block_private_addresses: BlockOpt = False,
+    allow_host: AllowHostOpt = None,
 ) -> None:
     """Convert an input folder and/or the web pages in sources.yaml to Markdown."""
     if input is None and sources is None:
@@ -186,6 +214,7 @@ def convert(
     if input is not None and not input.is_dir():
         raise _fail_config(f"--input {input}: not a folder")
     cfg, srcs = _load(config, sources)
+    cfg = _with_guard(cfg, block_private_addresses, allow_host)
     try:
         previous = manifest_io.load_previous(output)
     except ManifestError as exc:

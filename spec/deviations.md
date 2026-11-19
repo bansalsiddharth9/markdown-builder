@@ -109,6 +109,7 @@ On TTML2 this unwraps 329 tables: 120 examples and 138 syntax boxes (all with a 
 | F14 | — | `drop_selectors` are checked when `sources.yaml` is loaded; an invalid CSS selector is a config error (exit 2) | Fail before any work starts (D3). | implemented |
 | F15 | No network access in tests | An autouse test fixture blocks every connection that is not to the local machine; fetch tests use a local HTTP server, including the Chromium tests | Enforced instead of only promised. | implemented |
 | F16 | Relative image URLs become absolute (images stay on the web) | `fetch` downloads every `<img src>` image of the page, from any site, into `work/fetched/<id>_files/` and lists each one (URL, file, SHA-256, size, content type) in the sidecar; `convert` copies them into `media/` like a saved page's `_files` folder, still without network. An image that cannot be downloaded (HTTP error, an HTML page instead of an image, over 50 MB) does not fail the fetch: it keeps its web link and the document gets a warning. Same image URL: one download; same file name from two URLs: `x.png`, `x-2.png`. The cache is stale if a downloaded image is missing or changed; a changed image re-converts the document. | Decided by the user (option B, 2026-11-19): the library must keep its figures when the site moves or the reader is offline. | implemented |
+| F17 | Block private, loopback and link-local addresses and re-check after redirects (web app) | Added to `specconv` first (the fetch follows the redirects): `fetch.block_private_addresses` / `fetch.allow_hosts` in `specconv.yaml`, or `--block-private-addresses` and `--allow-host` on `fetch` and `convert`. Every request is checked before it is sent: the page, each redirect hop (httpx request hook), every image download, and for `render: browser` every request the page makes, which the guard makes itself without following redirects so a redirect target is checked before the browser follows it. The web worker always passes the flags with `fetch_allowlist`. The command line allows everything by default | Chromium does not show redirect hops to request interception, so the page would have reached an internal host before a check. | implemented |
 
 ### Live check
 
@@ -271,6 +272,18 @@ Host sizing (design open question): one PDF worker needs about 6 GB of memory; t
 | WB14 | DOCX sources shown as Pandoc HTML (open question W-b) | `pandoc --sandbox -f docx -t html`, sanitized with nh3, display only; plus a download link | W-b's proposed default: rendering a preview is not conversion logic. | decided |
 | WB15 | Review queue items link to the Markdown line and source page | Markdown lines link to the Raw tab (`#L<n>`, each line has an anchor); PDF pages link to the source with `#page=<n>` (opened by the browser's PDF viewer); other locations are shown as text | HTML and DOCX locations are element paths, not pages. | implemented |
 
+## Hardening and deployment (phase 11)
+
+| # | Design says | Implementation | Why | Status |
+| --- | --- | --- | --- | --- |
+| SEC1 | Check the file's actual type by content | PDF: `filetype` says PDF; DOCX: a ZIP with `word/document.xml`; HTML: no NUL bytes, not a known binary type, has markup; otherwise 400 "the content does not match" | `filetype` recognizes binary formats only; HTML needs its own test. | implemented |
+| SEC2 | Upload, queue and disk limits | 400 too many files, 413 file too large (read in 1 MB chunks, stopped at the limit), 429 too many jobs from one client, 503 queue full, 507 low disk; all checked before files are stored | Clear status codes for scripted use. | implemented |
+| SEC3 | Strict Content-Security-Policy | Every page: `default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; frame-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'self'`, plus `nosniff`, `no-referrer`, `SAMEORIGIN`. No inline scripts or styles (htmx's indicator styles switched off). HTML sources get `sandbox` instead; source PDFs get no CSP so the browser's PDF viewer works | Checked in Chromium: htmx polling and the review script work, no violations. | implemented |
+| SEC4 | Daily retention task | Huey periodic task at 03:17 deletes jobs older than `retention_days` that are not running; the library is untouched | — | implemented |
+| SEC5 | `/healthz` liveness and dependency check | Database, queue, Pandoc and free disk; 503 when one fails (used by the Docker health check) | — | implemented |
+| SEC6 | Per-client limits behind the reverse proxy | `specweb serve --forwarded-allow-ips` (default 127.0.0.1; `*` in Docker, where only the proxy can connect) so the client address comes from `X-Forwarded-For` | Otherwise every client would look like the proxy. | implemented |
+| SEC7 | Dockerfile and Compose with Caddy | `python:3.12.13-slim-bookworm`, Pandoc 3.14 `.deb`, uv 0.13.9 with `uv sync --frozen`, Chromium via `playwright install --with-deps`, the pinned models downloaded at build time, non-root user; Compose: `web`, `worker` (`mem_limit: 8g`), `proxy` (`caddy:2.10.2`, `tls internal`, 2.1 GB request limit) sharing the `data` volume; `deploy/specweb.yaml` | The image is self-contained, so conversion needs no network at run time. | implemented |
+
 ## Future scope (to be checked later)
 
 | # | Topic | Detail | Possible approach |
@@ -279,8 +292,10 @@ Host sizing (design open question): one PDF worker needs about 6 GB of memory; t
 | FS-2 | V6 lists TTML2's syntax boxes (`count = xsd:integer`) as "XML not well-formed (the source has the same problem)" | They start with `<` and contain closing tags, so they are parsed; the findings are info only and do not change the status, but they make the report long. | Recognize the W3C "syntax" box (class `syntax` on the source table) and skip XML parsing for it. |
 | FS-3 | No real DOCX spec has been converted yet | Phase 8 asks for one; `input/` has none. The DOCX path is tested with the synthetic fixture only. | Convert and validate a real DOCX spec when one is available; check the DOCX code-style question (phase 5 open question) at the same time. |
 | FS-4 | Editing a title after approval does not update the library copy | The library holds what was approved; later `title` / `spec_version` edits change the job's Markdown only. | Re-approve to store a new version, or let metadata edits also update the latest library version's `meta.json`. |
+| FS-5 | The Docker image has not been built here | This account has no access to the Docker daemon; `docker compose config` validates the Compose file and tests check the deployment files, but the image build (Pandoc `.deb`, Chromium, models) is untested. | Build and start it once on the target host: `docker compose -f deploy/docker-compose.yml up -d --build`, then open the site and check `/healthz`. |
+| FS-6 | DNS rebinding | The URL guard resolves a host name before each request; a host whose DNS answer changes between that check and the connection could still reach an internal address. | Pin the checked address for the connection (custom httpx transport) or run fetches through an egress proxy that enforces the rule. |
 
-## Web application still open (affect phases 9 to 11)
+## Web application questions (decided in phases 9 and 10)
 
 | # | Topic | Proposed default | Status |
 | --- | --- | --- | --- |

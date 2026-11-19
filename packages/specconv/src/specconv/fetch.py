@@ -26,15 +26,17 @@ from __future__ import annotations
 
 import datetime as dt
 import hashlib
+import ipaddress
 import json
 import logging
 import mimetypes
 import os
 import shutil
+import socket
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from urllib.parse import unquote, urlsplit
+from urllib.parse import unquote, urljoin, urlsplit
 
 from specconv import __version__
 from specconv.config import FetchConfig, Source
@@ -51,6 +53,56 @@ MAX_IMAGE_BYTES = 50 * 1024 * 1024
 
 class FetchError(RuntimeError):
     """A page could not be downloaded, or what came back is not an HTML page."""
+
+
+class BlockedAddress(FetchError):
+    """The URL's host is a private, loopback or link-local address (deviations F17)."""
+
+
+class HostGuard:
+    """Refuses URLs whose host resolves to an address that is not globally
+    routable (private, loopback, link-local, unspecified, multicast). Checked
+    before every request: the page, each redirect hop, every image."""
+
+    def __init__(self, allow_hosts=(), resolver=None) -> None:
+        self.allow = {h.lower() for h in allow_hosts}
+        self.resolver = resolver or _resolve
+
+    def check(self, url: str) -> None:
+        host = (urlsplit(url).hostname or "").lower()
+        if not host or host in self.allow:
+            return
+        try:
+            addresses = [str(ipaddress.ip_address(host))]
+        except ValueError:
+            addresses = self.resolver(host)
+        for address in addresses:
+            ip = ipaddress.ip_address(address.split("%")[0])
+            if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
+                ip = ip.ipv4_mapped
+            if not ip.is_global or ip.is_multicast:
+                raise BlockedAddress(
+                    f"{host} ({address}) is a private or local address; fetching it is not "
+                    "allowed (add the host to the allowlist if it is an intended internal host)"
+                )
+
+
+def _resolve(host: str) -> list[str]:
+    try:
+        return sorted({info[4][0] for info in socket.getaddrinfo(host, None)})
+    except OSError:
+        return []  # unknown host: the request itself fails with a clear error
+
+
+def guard_for(cfg: FetchConfig) -> HostGuard | None:
+    return HostGuard(cfg.allow_hosts) if cfg.block_private_addresses else None
+
+
+def _request_hook(cfg: FetchConfig) -> dict:
+    guard = guard_for(cfg)
+    if guard is None:
+        return {}
+    return {"request": [lambda request: guard.check(str(request.url))]}
 
 
 @dataclass(frozen=True)
@@ -237,7 +289,10 @@ def _download_images(
     failed: list[dict] = []
     taken: set[str] = set()
     with httpx.Client(
-        follow_redirects=True, timeout=cfg.timeout_s, headers={"User-Agent": cfg.user_agent}
+        follow_redirects=True,
+        timeout=cfg.timeout_s,
+        headers={"User-Agent": cfg.user_agent},
+        event_hooks=_request_hook(cfg),
     ) as client:
         for url in urls:
             try:
@@ -320,6 +375,7 @@ def _fetch_static(url: str, cfg: FetchConfig) -> _Page:
             follow_redirects=True,
             timeout=cfg.timeout_s,
             headers={"User-Agent": cfg.user_agent},
+            event_hooks=_request_hook(cfg),  # checks the page and every redirect hop
         ) as client:
             response = client.get(url)
     except httpx.TimeoutException as exc:
@@ -349,13 +405,51 @@ def _fetch_browser(url: str, cfg: FetchConfig) -> _Page:
 
     if cfg.browsers_path is not None:
         os.environ["PLAYWRIGHT_BROWSERS_PATH"] = str(cfg.browsers_path)
+    guard = guard_for(cfg)
+    blocked: list[str] = []
+    if guard is not None:
+        guard.check(url)
+
+    def route(request_route) -> None:
+        """Every request the page makes. Chromium does not show redirect hops to
+        route handlers, so the request is made here without following
+        redirects; a redirect target is checked before the browser follows it
+        (and its request comes through here again)."""
+        request_url = request_route.request.url
+        try:
+            guard.check(request_url)
+            response = request_route.fetch(max_redirects=0)
+            location = response.headers.get("location")
+            if 300 <= response.status < 400 and location:
+                guard.check(urljoin(request_url, location))
+        except BlockedAddress as exc:
+            blocked.append(str(exc))
+            request_route.abort("blockedbyclient")
+            return
+        request_route.fulfill(response=response)
+
     try:
         with sync_playwright() as pw:
             browser = pw.chromium.launch()
             try:
                 context = browser.new_context(user_agent=cfg.user_agent)
+                if guard is not None:
+                    context.route("**/*", route)
                 page = context.new_page()
-                response = page.goto(url, wait_until="networkidle", timeout=cfg.timeout_s * 1000)
+                try:
+                    response = page.goto(
+                        url, wait_until="networkidle", timeout=cfg.timeout_s * 1000
+                    )
+                except PlaywrightError:
+                    if blocked:
+                        raise BlockedAddress(blocked[0]) from None
+                    raise
+                if guard is not None and response is not None:
+                    # redirects of the page itself: refuse the result if a hop was internal
+                    hop = response.request
+                    while hop is not None:
+                        guard.check(hop.url)
+                        hop = hop.redirected_from
                 if response is None:
                     raise FetchError(f"no response for {url}")
                 if response.status != 200:

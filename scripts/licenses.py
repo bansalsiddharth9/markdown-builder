@@ -76,6 +76,12 @@ SYSTEM_TOOLS = [
     ),
     ("uv", "0.13.9", "MIT OR Apache-2.0", "environment and lock file management"),
     (
+        "Caddy (Docker image caddy:2.10.2)",
+        "2.10.2",
+        "Apache-2.0",
+        "reverse proxy with HTTPS in deploy/docker-compose.yml; separate container",
+    ),
+    (
         "htmx",
         "2.0.4",
         "0BSD",

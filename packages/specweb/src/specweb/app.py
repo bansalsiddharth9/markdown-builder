@@ -12,12 +12,19 @@ from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
-from specweb import __version__, api, doc_routes
+from specweb import __version__, api, doc_routes, security
 from specweb.db import RUNNING, sessions
 from specweb.jobs import JobError, parse_urls_text
 from specweb.settings import WebConfig, load_config
 from specweb.templating import HERE, templates
 
+# Strict policy (design: Security): own scripts and styles only, no plugins,
+# frames only from this site (source previews), forms post only here.
+CSP = (
+    "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; "
+    "frame-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; "
+    "frame-ancestors 'self'"
+)
 JOB_STATUSES = ("queued", "fetching", "converting", "validating", "done", "error")
 
 
@@ -30,6 +37,19 @@ def create_app(cfg: WebConfig | None = None) -> FastAPI:
     app.mount("/static", StaticFiles(directory=str(HERE / "static")), name="static")
     app.include_router(api.router)
     app.include_router(doc_routes.router)
+
+    @app.middleware("http")
+    async def security_headers(request: Request, call_next):
+        response = await call_next(request)
+        # A source PDF is shown by the browser's own viewer, which a CSP can break.
+        if response.headers.get("content-type", "").startswith("application/pdf"):
+            response.headers.setdefault("X-Content-Type-Options", "nosniff")
+            return response
+        response.headers.setdefault("Content-Security-Policy", CSP)
+        response.headers.setdefault("X-Content-Type-Options", "nosniff")
+        response.headers.setdefault("Referrer-Policy", "no-referrer")
+        response.headers.setdefault("X-Frame-Options", "SAMEORIGIN")
+        return response
 
     @app.get("/", response_class=HTMLResponse)
     def upload_page(request: Request) -> HTMLResponse:
@@ -45,7 +65,8 @@ def create_app(cfg: WebConfig | None = None) -> FastAPI:
     ):
         try:
             urls = parse_urls_text(urls_text)
-            job = api.submit(request, await api.read_uploads(files), urls, split, submitted_by)
+            uploads = await api.read_uploads(request, files)
+            job = api.submit(request, uploads, urls, split, submitted_by)
         except (HTTPException, JobError) as exc:
             message = exc.detail if isinstance(exc, HTTPException) else str(exc)
             return templates.TemplateResponse(
@@ -83,4 +104,5 @@ def _jobs_context(cfg: WebConfig, status: str | None) -> dict:
         "status": status,
         "statuses": JOB_STATUSES,
         "any_running": any(j["status"] in ("queued", *RUNNING) for j in jobs),
+        "disk": security.disk_usage(cfg),
     }

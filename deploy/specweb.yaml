@@ -1,0 +1,15 @@
+# specweb settings for the Docker image (design: Configuration).
+# Paths are relative to this file (/app/deploy).
+data_dir: /data
+specconv_config: ../config/specconv.yaml
+specval_config: ../config/specval.yaml
+acceptance: ../config/acceptance.yaml
+worker_concurrency: 1        # Docling needs about 6 GB per worker
+step_timeout_s: 900          # per document and step
+max_file_mb: 100
+max_files: 20
+max_jobs_per_ip: 5
+max_queue: 50
+retention_days: 30
+min_free_disk_mb: 2048
+fetch_allowlist: []          # internal hosts users may fetch from, e.g. [wiki.intranet]

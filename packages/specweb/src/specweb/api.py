@@ -9,7 +9,7 @@ from typing import Annotated
 from fastapi import APIRouter, File, Form, HTTPException, Request, Response, UploadFile
 from sqlalchemy import select, text
 
-from specweb import tasks
+from specweb import security, tasks
 from specweb.db import RUNNING, Job, sessions
 from specweb.jobs import (
     JobError,
@@ -30,13 +30,16 @@ def config(request: Request) -> WebConfig:
     return request.app.state.config
 
 
-async def read_uploads(files: list[UploadFile] | None) -> list[Upload]:
-    uploads = []
-    for f in files or []:
-        if not f.filename:
-            continue
-        uploads.append(Upload(f.filename, await f.read()))
-    return uploads
+def client_ip(request: Request) -> str | None:
+    # behind the reverse proxy, uvicorn sets this from X-Forwarded-For
+    return request.client.host if request.client else None
+
+
+async def read_uploads(request: Request, files: list[UploadFile] | None) -> list[Upload]:
+    """Capacity first (queue, client, disk), then the files with their limits."""
+    cfg = config(request)
+    security.check_capacity(cfg, client_ip(request))
+    return await security.read_uploads(cfg, files)
 
 
 def submit(
@@ -47,9 +50,9 @@ def submit(
     submitted_by: str | None,
 ) -> Job:
     cfg = config(request)
-    client_ip = request.client.host if request.client else None
+    security.check_urls(cfg, urls)
     try:
-        job = create_job(cfg, uploads, urls, parse_split(split), submitted_by, client_ip)
+        job = create_job(cfg, uploads, urls, parse_split(split), submitted_by, client_ip(request))
     except JobError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     tasks.enqueue(cfg, job.id)
@@ -68,7 +71,7 @@ async def post_job(
         url_sources = parse_urls_json(urls)
     except JobError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    job = submit(request, await read_uploads(files), url_sources, split, submitted_by)
+    job = submit(request, await read_uploads(request, files), url_sources, split, submitted_by)
     return get_job_dict(config(request), job.id)
 
 
@@ -134,6 +137,14 @@ def healthz(request: Request, response: Response) -> dict:
         checks["database"] = "ok"
     except Exception as exc:  # report, do not crash the health check
         checks["database"] = f"error: {exc}"
+    from specconv.deps import find_pandoc
+
+    checks["pandoc"] = "ok" if find_pandoc() is not None else "missing"
+    try:
+        tasks.huey.pending_count()
+        checks["queue"] = "ok"
+    except Exception as exc:  # report, do not crash the health check
+        checks["queue"] = f"error: {exc}"
     usage = shutil.disk_usage(cfg.data_dir)
     free_mb = usage.free / 2**20
     checks["disk"] = "ok" if free_mb >= cfg.min_free_disk_mb else f"low: {free_mb:.0f} MB free"

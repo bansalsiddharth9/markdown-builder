@@ -5,6 +5,8 @@ Two command-line tools that turn caption specifications into a Markdown referenc
 - **`specconv`** converts PDF, HTML, DOCX and web pages to Markdown (Docling for PDFs, Pandoc for the rest).
 - **`specval`** checks each converted file against its source on its own terms and writes a report saying what passed and what a person must check.
 
+A web UI, **`specweb`**, puts both behind a browser page for the internal network (see [Web app](#web-app-specweb)).
+
 The design is in [`spec/Caption Spec to Markdown Converter — Design.md`](spec/Caption%20Spec%20to%20Markdown%20Converter%20—%20Design.md); every place the build differs from it is listed in [`spec/deviations.md`](spec/deviations.md).
 
 ## Setup (once per machine)
@@ -107,6 +109,28 @@ Edit `title`, `spec_version` and `manual_fixes` in the front matter freely: they
 - `config/acceptance.yaml`: questions with an expected snippet per document (check V9); quote every `expect` value.
 
 Unknown keys are errors, so a typo never goes unnoticed.
+
+## Web app (`specweb`)
+
+A browser UI on top of the two tools: upload files or paste URLs, follow the job, review each document side by side with its source, tick the review queue, approve, and download. Approved documents are kept in a library. There are no accounts: everyone who can reach the port can use every feature, so run it on the internal network only.
+
+Run it locally (two processes, same settings):
+
+```bash
+cp deploy/specweb.yaml my-specweb.yaml        # then set data_dir, e.g. data
+uv run specweb serve  --config my-specweb.yaml --port 8000
+uv run specweb worker --config my-specweb.yaml
+```
+
+Deploy with Docker Compose (web, worker and a Caddy proxy with HTTPS, sharing one data volume):
+
+```bash
+SPECWEB_HOST=specs.intranet docker compose -f deploy/docker-compose.yml up -d --build
+```
+
+The image contains Pandoc, Chromium and the pinned Docling models. Give the worker about 8 GB of memory per PDF conversion; `worker_concurrency` in `deploy/specweb.yaml` sets how many run at once.
+
+Protections (settings in `specweb.yaml`): at most 20 files of 100 MB per job, file contents must match their extension; URLs that point at private, loopback or link-local addresses are refused, also after redirects and for page images (`fetch_allowlist` permits named internal hosts); at most 5 waiting jobs per client and 50 in total; new jobs are refused when free disk is low; jobs are deleted after 30 days (approved documents stay in the library); rendered Markdown is sanitized and HTML sources are shown sandboxed without scripts.
 
 ## What to expect from PDFs
 

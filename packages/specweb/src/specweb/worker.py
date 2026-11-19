@@ -76,6 +76,10 @@ def process_job(cfg: WebConfig, job_id: str) -> None:
     sources = folder / "sources.yaml"
     work, output, validation, logs = (folder / n for n in ("work", "output", "validation", "logs"))
     conv_cfg = ["--config", str(cfg.specconv_config)] if cfg.specconv_config else []
+    # Fetching for anyone on the network: never reach private addresses (design: Security).
+    guard = ["--block-private-addresses"]
+    for host in cfg.fetch_allowlist:
+        guard += ["--allow-host", host]
     val_cfg = ["--config", str(cfg.specval_config)] if cfg.specval_config else []
     if cfg.acceptance:
         val_cfg += ["--acceptance", str(cfg.acceptance)]
@@ -83,10 +87,10 @@ def process_job(cfg: WebConfig, job_id: str) -> None:
         if n_urls:
             _set(cfg, job_id, status="fetching", doc_status="fetching")
             # Fetch failures are recorded per document by convert; carry on.
-            run_step(["fetch", "--sources", str(sources), "--work", str(work), *conv_cfg],
+            run_step(["fetch", "--sources", str(sources), "--work", str(work), *conv_cfg, *guard],
                      cfg.step_timeout_s * n_urls, logs / "fetch.log")  # fmt: skip
         _set(cfg, job_id, status="converting", doc_status="converting")
-        args = ["convert", "--output", str(output), "--work", str(work), *conv_cfg]
+        args = ["convert", "--output", str(output), "--work", str(work), *conv_cfg, *guard]
         if has_files:
             args += ["--input", str(folder / "input")]
         if n_urls:

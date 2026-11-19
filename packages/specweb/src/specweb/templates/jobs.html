@@ -2,13 +2,15 @@
 {% block title %}Jobs · Spec converter{% endblock %}
 {% block content %}
 <h1>Jobs</h1>
+<p class="meta">Disk: {{ disk.data_mb }} MB used by jobs and the library, {{ disk.free_mb }} MB free. Jobs are deleted automatically after a while; approved documents stay in the library.</p>
 <form method="get" action="/jobs" class="filter">
   <label>Status
-    <select name="status" onchange="this.form.submit()">
+    <select name="status">
       <option value="">all</option>
       {% for s in statuses %}<option value="{{ s }}" {% if s == status %}selected{% endif %}>{{ s }}</option>{% endfor %}
     </select>
   </label>
+  <button type="submit">Filter</button>
 </form>
 {% include "_jobs_table.html" %}
 {% endblock %}

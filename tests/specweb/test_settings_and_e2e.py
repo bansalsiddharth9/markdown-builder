@@ -81,3 +81,11 @@ def test_real_job_end_to_end(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fi
     assert (folder / "output/sample-spec/sections/index.md").is_file()
     assert (folder / "validation/sample-spec.json").is_file()
     assert (folder / "logs/convert.log").is_file() and (folder / "logs/validate.log").is_file()
+
+
+def test_serve_accepts_proxy_option() -> None:
+    proc = subprocess.run(
+        [sys.executable, "-m", "specweb", "serve", "--help"], capture_output=True, text=True,
+        timeout=60,
+    )  # fmt: skip
+    assert proc.returncode == 0 and "--forwarded-allow-ips" in proc.stdout

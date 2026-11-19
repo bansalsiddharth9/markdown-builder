@@ -1,0 +1,47 @@
+# Three services sharing one data volume (design: Deployment).
+#   docker compose -f deploy/docker-compose.yml up -d --build
+# Set SPECWEB_HOST to the name users type (default: localhost).
+services:
+  web:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    image: spec-converter:0.1.0
+    command: ["specweb", "serve", "--host", "0.0.0.0", "--port", "8000", "--forwarded-allow-ips", "*"]
+    volumes:
+      - data:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  worker:
+    image: spec-converter:0.1.0
+    command: ["specweb", "worker"]
+    volumes:
+      - data:/data
+    restart: unless-stopped
+    depends_on:
+      - web
+    # Docling needs about 6 GB per PDF being converted (phase 8 measurement).
+    mem_limit: 8g
+
+  proxy:
+    image: caddy:2.10.2
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      SPECWEB_HOST: ${SPECWEB_HOST:-localhost}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+    restart: unless-stopped
+    depends_on:
+      - web
+
+volumes:
+  data:
+  caddy_data:
