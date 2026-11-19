@@ -19,6 +19,30 @@ Status: **open** = waiting for a decision; **accepted** = confirmed by the proje
 | E6 | Pin all versions | `typer` pinned to 0.27.3 instead of the newest | Docling 2.151.0 requires `typer <0.28`, and the workspace shares one lock file. | implemented |
 | E7 | — | `scripts/licenses.py` generates `LICENSES.md`; `tests/test_licenses.py` fails if the file is stale or any installed package has a license outside an allowed list | Enforces design principle 5 automatically whenever dependencies change. | implemented |
 | E8 | — | Docling requests its layout model (`docling-project/docling-layout-heron`) at revision `main`, which is not pinned | To do in phase 3: pin both Docling models to fixed revisions and store them inside the project, so conversions stay reproducible. | open |
+| E9 | — | `ruff` (MIT) added as a pinned dev tool; code formatted with it; lint rules fixed explicitly in `pyproject.toml` (`E, F, W, I, B, UP`, line length 100) | Consistent formatting across phases; an explicit rule set does not change when ruff's defaults do. | implemented |
+
+## Converter (phase 2)
+
+| # | Design says | Implementation | Why | Status |
+| --- | --- | --- | --- | --- |
+| P1 | "Keep heading `id` attributes where Pandoc emits them" | Pandoc's `gfm` writer emits none, so in-page links broke. **Resolved in the design** (Lua filter `anchors.lua`, anchors on the heading line). Not implemented yet: added at the start of phase 3, together with self-link rewriting. | Design updated after phase 2. | accepted |
+| P2 | Protected regions: fenced code, pipe tables, HTML `<table>` | Also indented code blocks and raw HTML `<pre>` blocks. The scanner is deliberately conservative: unclosed fences and HTML blocks are protected to the end of the document. | Pandoc writes DOCX code ("Source Code" style) as indented code, not fenced, so trailing-whitespace cleanup would otherwise alter code. Over-protecting only skips cosmetic cleanup; it never changes content. | implemented |
+| P3 | Raw HTML blocks | A `<table>`/`<pre>` region starts only when the tag begins a line | Spec prose mentions elements inline (e.g. "the \<table\> element"); those must not start a region. | implemented |
+| P4 | `pandoc SRC … --extract-media=OUT/media -o OUT/raw.md` | Pandoc runs inside the document folder with `--extract-media=media` and `--resource-path=<source folder>`; Markdown is read from stdout (no `raw.md`) | Links come out relative (`media/…`) without rewriting; relative image paths in HTML resolve from the source's folder. | implemented |
+| P5 | HTML cleanup (`strip_tags`) is described for fetched pages | Also applied to local HTML files. The cleaned copy goes to `work/<id>/clean.html`; parsing uses Python's `html.parser`, which does not restructure the document; output is always UTF-8. `source.<ext>` stays the untouched original. | Local HTML has the same script/style/noscript noise (e.g. `<noscript>` text leaked into Markdown); Pandoc requires UTF-8 input. | implemented |
+| P6 | `<id>` = slug of the file name, duplicates get a numeric suffix | Same, plus ids are **stable across runs**: a file keeps the id its path had in the previous manifest, and a new file never takes an id already in the manifest or an existing output folder name | Without this, adding or removing a file shifted ids, so a document was written into another document's folder and inherited its hand-edited title, version and validation. Found by a test. | implemented |
+| P7 | Carry over `title`, `spec_version`, `manual_fixes`, `validated` | Refused (document fails with a clear message) when the existing file belongs to a different source or id, or its front matter cannot be read | Never give one document's hand-edited fields to another, never silently drop them. | implemented |
+| P8 | — | Warning when the body changed and the previous file lists `manual_fixes` | Re-conversion replaces hand edits to the body; the person should know. | implemented |
+| P9 | One output folder per document | Built in a temporary folder and swapped into place only on success | A failed re-conversion keeps the previous good output; stale media from an earlier conversion are removed. | implemented |
+| P10 | Manifest lists every input | Full run: exactly the current inputs. `--only`: other entries kept. Output folders of removed inputs are kept on disk, with a warning. | Never delete converted files automatically. | implemented |
+| P11 | Statuses `ok, failed, no_text_layer, unsupported, skipped_unchanged`; exit 1 if a document failed | Exit 1 for `failed` and `no_text_layer`; `unsupported` (`.doc`) is a warning only. Manifest `source_type` gains `doc`. | A `.doc` file is a known, reported limitation rather than a conversion failure. | open |
+| P12 | Ignore other extensions and log them as skipped | Hidden files and folders (`.gitkeep`, `.DS_Store`) are ignored silently | They are never documents. | implemented |
+| P13 | Per-document timeout (15 minutes, described for the web worker) | Pandoc is run with a 900 s timeout in the CLI too | A hung converter must not block a run. | implemented |
+| P14 | — | Until their phases land, PDFs fail with "built in phase 3" and web sources with "built in phase 4" | Fail loudly rather than skip. | temporary |
+
+### Heading ids (P1): resolved
+
+The design chose option C (Lua filter writing `<a id>` anchors on the heading line). The comparison of options A to C that led to it is in the git history of this file.
 
 ## Command line
 
@@ -30,7 +54,7 @@ Status: **open** = waiting for a decision; **accepted** = confirmed by the proje
 | C4 | `specval approve ID --output [--override]` | Added `--by NAME` | The web UI records who approved; the CLI should be able to as well. | implemented |
 | C5 | `convert --input input/ --sources sources.yaml` | Both are optional, but at least one is required | Allows converting only files or only web pages. | implemented |
 | C6 | A log file per run | `convert` → `output/run-<timestamp>.log`; `fetch` → `work/fetch-<timestamp>.log`; `specval run` → `validation/run-<timestamp>.log` | The design only names the `convert` log location. | implemented |
-| C7 | — | Commands not built yet exit with code 1 and say "not implemented yet (phase N)" | Design principle 3: fail loudly, never pretend to succeed. Removed as each phase lands. | implemented |
+| C7 | — | Commands not built yet exit with code 1 and say "not implemented yet (phase N)" | Design principle 3: fail loudly, never pretend to succeed. Removed as each phase lands (`convert`: phase 2; `--split` exits 2 until phase 7). | implemented |
 
 ## Data formats
 

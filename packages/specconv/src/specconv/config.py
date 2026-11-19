@@ -141,32 +141,44 @@ def load_config(path: Path | None = None) -> SpecconvConfig:
     pdf_d = _mapping(data.get("pdf"), f"{path}: pdf")
     _reject_unknown(pdf_d, {"min_chars_per_page", "min_text_page_ratio"}, f"{path}: pdf")
     pdf = PdfConfig(
-        min_chars_per_page=_int(pdf_d.get("min_chars_per_page", PdfConfig.min_chars_per_page),
-                                f"{path}: pdf.min_chars_per_page", minimum=1),
-        min_text_page_ratio=_float(pdf_d.get("min_text_page_ratio", PdfConfig.min_text_page_ratio),
-                                   f"{path}: pdf.min_text_page_ratio", lo=0.0, hi=1.0),
+        min_chars_per_page=_int(
+            pdf_d.get("min_chars_per_page", PdfConfig.min_chars_per_page),
+            f"{path}: pdf.min_chars_per_page",
+            minimum=1,
+        ),
+        min_text_page_ratio=_float(
+            pdf_d.get("min_text_page_ratio", PdfConfig.min_text_page_ratio),
+            f"{path}: pdf.min_text_page_ratio",
+            lo=0.0,
+            hi=1.0,
+        ),
     )
 
     html_d = _mapping(data.get("html"), f"{path}: html")
     _reject_unknown(html_d, {"strip_tags"}, f"{path}: html")
     html = HtmlConfig(
         strip_tags=_str_list(html_d["strip_tags"], f"{path}: html.strip_tags")
-        if "strip_tags" in html_d else HtmlConfig.strip_tags,
+        if "strip_tags" in html_d
+        else HtmlConfig.strip_tags,
     )
 
     fetch_d = _mapping(data.get("fetch"), f"{path}: fetch")
-    _reject_unknown(fetch_d, {"timeout_s", "retries", "user_agent", "browsers_path"},
-                    f"{path}: fetch")
+    _reject_unknown(
+        fetch_d, {"timeout_s", "retries", "user_agent", "browsers_path"}, f"{path}: fetch"
+    )
     browsers_path = None
     if fetch_d.get("browsers_path") is not None:
         browsers_path = base / _str(fetch_d["browsers_path"], f"{path}: fetch.browsers_path")
     fetch = FetchConfig(
-        timeout_s=_float(fetch_d.get("timeout_s", FetchConfig.timeout_s),
-                         f"{path}: fetch.timeout_s", lo=1.0),
-        retries=_int(fetch_d.get("retries", FetchConfig.retries),
-                     f"{path}: fetch.retries", minimum=0),
-        user_agent=_str(fetch_d.get("user_agent", FetchConfig.user_agent),
-                        f"{path}: fetch.user_agent"),
+        timeout_s=_float(
+            fetch_d.get("timeout_s", FetchConfig.timeout_s), f"{path}: fetch.timeout_s", lo=1.0
+        ),
+        retries=_int(
+            fetch_d.get("retries", FetchConfig.retries), f"{path}: fetch.retries", minimum=0
+        ),
+        user_agent=_str(
+            fetch_d.get("user_agent", FetchConfig.user_agent), f"{path}: fetch.user_agent"
+        ),
         browsers_path=browsers_path.resolve() if browsers_path else None,
     )
     return SpecconvConfig(pdf=pdf, html=html, fetch=fetch)
@@ -211,7 +223,9 @@ def load_sources(path: Path) -> list[Source]:
 
         render = item.get("render", "static")
         if render not in RENDER_MODES:
-            raise ConfigError(f"{where}.render: must be one of {list(RENDER_MODES)}, got {render!r}")
+            raise ConfigError(
+                f"{where}.render: must be one of {list(RENDER_MODES)}, got {render!r}"
+            )
         clean = item.get("clean", "none")
         if clean not in CLEAN_MODES:
             raise ConfigError(f"{where}.clean: must be one of {list(CLEAN_MODES)}, got {clean!r}")

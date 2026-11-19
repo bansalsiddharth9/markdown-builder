@@ -9,6 +9,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
 
+MEDIA_DIR = "media"  # extracted images, relative to the document folder
+
+
+class ConversionError(RuntimeError):
+    """A converter failed; the message says why."""
+
 
 @dataclass
 class ConversionResult:

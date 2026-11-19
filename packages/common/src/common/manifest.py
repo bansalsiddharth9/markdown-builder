@@ -15,7 +15,7 @@ from typing import Any
 SCHEMA_VERSION = 1
 
 STATUSES = frozenset({"ok", "failed", "no_text_layer", "unsupported", "skipped_unchanged"})
-SOURCE_TYPES = frozenset({"pdf", "html", "docx", "web"})
+SOURCE_TYPES = frozenset({"pdf", "html", "docx", "web", "doc"})  # doc: unsupported in v1
 
 
 class ManifestError(ValueError):
@@ -28,7 +28,7 @@ class ManifestEntry:
 
     id: str
     source: str  # path relative to the input folder, or the URL for web sources
-    source_type: str  # pdf | html | docx | web
+    source_type: str  # pdf | html | docx | web | doc (not converted)
     status: str  # see STATUSES
     source_sha256: str | None = None
     route: str | None = None  # e.g. "pandoc:html", "docling", "none:no_text_layer"

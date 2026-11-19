@@ -65,10 +65,14 @@ def test_split_out_of_range_exits_2() -> None:
 
 
 def test_missing_dependency_exits_2_and_lists_all(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(deps, "check_pandoc",
-                        lambda: [DependencyProblem("pandoc", "not found", "install it")])
-    monkeypatch.setattr(deps, "check_python_package",
-                        lambda dist, hint=None: [DependencyProblem(dist, "not installed", "uv sync")])
+    monkeypatch.setattr(
+        deps, "check_pandoc", lambda: [DependencyProblem("pandoc", "not found", "install it")]
+    )
+    monkeypatch.setattr(
+        deps,
+        "check_python_package",
+        lambda dist, hint=None: [DependencyProblem(dist, "not installed", "uv sync")],
+    )
     result = invoke("convert", "--input", "input")
     assert result.exit_code == 2
     assert "pandoc: not found" in result.output and "docling: not installed" in result.output
@@ -85,13 +89,13 @@ def test_chromium_checked_only_for_browser_sources(write, monkeypatch: pytest.Mo
     assert calls == ["chromium"]
 
 
-def test_convert_stub_fails_loudly_and_writes_run_log(in_tmp: Path) -> None:
+def test_convert_empty_input_writes_manifest_and_run_log(in_tmp: Path) -> None:
     result = invoke("convert", "--input", "input", "--output", "out")
-    assert result.exit_code == 1
-    assert "not implemented yet" in result.output
+    assert result.exit_code == 0, result.output
+    assert (in_tmp / "out" / "manifest.json").exists()
     [log] = (in_tmp / "out").glob("run-*.log")
     text = log.read_text(encoding="utf-8")
-    assert "tool versions" in text and "pandoc" in text
+    assert "tool versions" in text and "pandoc" in text and "no documents" in text
 
 
 def test_fetch_stub_writes_log_in_work(write, in_tmp: Path) -> None:

@@ -60,13 +60,26 @@ def _read_manifest(output: Path) -> Manifest:
 @app.command()
 def run(
     output: OutputOpt = Path("output"),
-    doc: Annotated[str | None, typer.Option("--doc", help="Validate only this document id.")] = None,
-    config: Annotated[Path | None, typer.Option(
-        "--config", help="specval.yaml (default: config/specval.yaml if present, else built-in defaults).")] = None,
-    acceptance: Annotated[Path | None, typer.Option(
-        "--acceptance", help="acceptance.yaml (default: config/acceptance.yaml if present).")] = None,
+    doc: Annotated[
+        str | None, typer.Option("--doc", help="Validate only this document id.")
+    ] = None,
+    config: Annotated[
+        Path | None,
+        typer.Option(
+            "--config",
+            help="specval.yaml (default: config/specval.yaml if present, else built-in defaults).",
+        ),
+    ] = None,
+    acceptance: Annotated[
+        Path | None,
+        typer.Option(
+            "--acceptance", help="acceptance.yaml (default: config/acceptance.yaml if present)."
+        ),
+    ] = None,
     validation: ValidationOpt = Path("validation"),
-    verbose: Annotated[bool, typer.Option("--verbose", "-v", help="Also show debug messages.")] = False,
+    verbose: Annotated[
+        bool, typer.Option("--verbose", "-v", help="Also show debug messages.")
+    ] = False,
 ) -> None:
     """Check every converted document and write reports to the validation folder."""
     try:
@@ -82,8 +95,13 @@ def run(
         raise _fail_config(f"--doc {doc!r}: not in {output / 'manifest.json'}")
 
     with run_logging(validation / f"run-{run_timestamp()}.log", verbose) as log:
-        log.info("specval %s run: output=%s documents=%d acceptance questions=%d",
-                 __version__, output, len(manifest.entries), len(questions))
+        log.info(
+            "specval %s run: output=%s documents=%d acceptance questions=%d",
+            __version__,
+            output,
+            len(manifest.entries),
+            len(questions),
+        )
         log.debug("config: %s", cfg)
         log.debug("tool versions: %s", deps.tool_versions())
         log.error("run is not implemented yet (build phases 5-6)")
@@ -94,8 +112,13 @@ def run(
 def approve(
     doc_id: Annotated[str, typer.Argument(metavar="ID", help="Document id to approve.")],
     output: OutputOpt = Path("output"),
-    override: Annotated[str | None, typer.Option(
-        "--override", help="Approve despite fail findings; the reason is recorded in manual_fixes.")] = None,
+    override: Annotated[
+        str | None,
+        typer.Option(
+            "--override",
+            help="Approve despite fail findings; the reason is recorded in manual_fixes.",
+        ),
+    ] = None,
     by: Annotated[str | None, typer.Option("--by", help="Name of the person approving.")] = None,
     validation: ValidationOpt = Path("validation"),
 ) -> None:

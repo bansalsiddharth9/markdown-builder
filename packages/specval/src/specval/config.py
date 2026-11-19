@@ -121,23 +121,49 @@ def load_config(path: Path | None = None) -> SpecvalConfig:
             return SpecvalConfig()
         path = DEFAULT_CONFIG_PATH
     data = _mapping(_read_yaml(path), str(path))
-    _reject_unknown(data, {"text_coverage", "pdf_table_count_tolerance",
-                           "always_review_table_patterns", "sample_pages", "token_families"},
-                    str(path))
+    _reject_unknown(
+        data,
+        {
+            "text_coverage",
+            "pdf_table_count_tolerance",
+            "always_review_table_patterns",
+            "sample_pages",
+            "token_families",
+        },
+        str(path),
+    )
     d = SpecvalConfig()
 
     tc_d = _mapping(data.get("text_coverage"), f"{path}: text_coverage")
-    _reject_unknown(tc_d, {"fail_below", "warn_below", "min_sentence_chars", "fuzzy_ratio"},
-                    f"{path}: text_coverage")
+    _reject_unknown(
+        tc_d,
+        {"fail_below", "warn_below", "min_sentence_chars", "fuzzy_ratio"},
+        f"{path}: text_coverage",
+    )
     tc = TextCoverage(
-        fail_below=_float(tc_d.get("fail_below", d.text_coverage.fail_below),
-                          f"{path}: text_coverage.fail_below", 0.0, 1.0),
-        warn_below=_float(tc_d.get("warn_below", d.text_coverage.warn_below),
-                          f"{path}: text_coverage.warn_below", 0.0, 1.0),
-        min_sentence_chars=_int(tc_d.get("min_sentence_chars", d.text_coverage.min_sentence_chars),
-                                f"{path}: text_coverage.min_sentence_chars", minimum=1),
-        fuzzy_ratio=_float(tc_d.get("fuzzy_ratio", d.text_coverage.fuzzy_ratio),
-                           f"{path}: text_coverage.fuzzy_ratio", 0.0, 100.0),
+        fail_below=_float(
+            tc_d.get("fail_below", d.text_coverage.fail_below),
+            f"{path}: text_coverage.fail_below",
+            0.0,
+            1.0,
+        ),
+        warn_below=_float(
+            tc_d.get("warn_below", d.text_coverage.warn_below),
+            f"{path}: text_coverage.warn_below",
+            0.0,
+            1.0,
+        ),
+        min_sentence_chars=_int(
+            tc_d.get("min_sentence_chars", d.text_coverage.min_sentence_chars),
+            f"{path}: text_coverage.min_sentence_chars",
+            minimum=1,
+        ),
+        fuzzy_ratio=_float(
+            tc_d.get("fuzzy_ratio", d.text_coverage.fuzzy_ratio),
+            f"{path}: text_coverage.fuzzy_ratio",
+            0.0,
+            100.0,
+        ),
     )
     if tc.warn_below < tc.fail_below:
         raise ConfigError(f"{path}: text_coverage.warn_below must be >= fail_below")
@@ -145,7 +171,9 @@ def load_config(path: Path | None = None) -> SpecvalConfig:
     sp_d = _mapping(data.get("sample_pages"), f"{path}: sample_pages")
     _reject_unknown(sp_d, {"count", "seed"}, f"{path}: sample_pages")
     sp = SamplePages(
-        count=_int(sp_d.get("count", d.sample_pages.count), f"{path}: sample_pages.count", minimum=0),
+        count=_int(
+            sp_d.get("count", d.sample_pages.count), f"{path}: sample_pages.count", minimum=0
+        ),
         seed=_int(sp_d.get("seed", d.sample_pages.seed), f"{path}: sample_pages.seed"),
     )
 
@@ -166,10 +194,14 @@ def load_config(path: Path | None = None) -> SpecvalConfig:
         text_coverage=tc,
         pdf_table_count_tolerance=_int(
             data.get("pdf_table_count_tolerance", d.pdf_table_count_tolerance),
-            f"{path}: pdf_table_count_tolerance", minimum=0),
+            f"{path}: pdf_table_count_tolerance",
+            minimum=0,
+        ),
         always_review_table_patterns=_str_list(
-            data["always_review_table_patterns"], f"{path}: always_review_table_patterns")
-        if "always_review_table_patterns" in data else d.always_review_table_patterns,
+            data["always_review_table_patterns"], f"{path}: always_review_table_patterns"
+        )
+        if "always_review_table_patterns" in data
+        else d.always_review_table_patterns,
         sample_pages=sp,
         token_families=families,
     )
@@ -197,11 +229,14 @@ def load_acceptance(path: Path) -> list[AcceptanceQuestion]:
         expect = item["expect"]
         if not isinstance(expect, str):
             # YAML reads unquoted 0x25 as 37 and 1.10 as 1.1; never guess the intended text.
-            raise ConfigError(f"{where}.expect: must be a quoted string, got {expect!r} "
-                              f"(write expect: \"...\")")
-        questions.append(AcceptanceQuestion(
-            doc=_str(item["doc"], f"{where}.doc"),
-            question=_str(item["question"], f"{where}.question"),
-            expect=_str(expect, f"{where}.expect"),
-        ))
+            raise ConfigError(
+                f'{where}.expect: must be a quoted string, got {expect!r} (write expect: "...")'
+            )
+        questions.append(
+            AcceptanceQuestion(
+                doc=_str(item["doc"], f"{where}.doc"),
+                question=_str(item["question"], f"{where}.question"),
+                expect=_str(expect, f"{where}.expect"),
+            )
+        )
     return questions

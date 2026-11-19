@@ -27,10 +27,13 @@ def imported_top_level_modules(src: Path) -> dict[str, set[str]]:
     return found
 
 
-@pytest.mark.parametrize("package, forbidden", [
-    ("specconv", "specval"),
-    ("specval", "specconv"),
-])
+@pytest.mark.parametrize(
+    "package, forbidden",
+    [
+        ("specconv", "specval"),
+        ("specval", "specconv"),
+    ],
+)
 def test_converter_and_validator_do_not_import_each_other(package: str, forbidden: str) -> None:
     imports = imported_top_level_modules(PACKAGES / package / "src")
     assert forbidden not in imports, f"{package} imports {forbidden} in {imports[forbidden]}"
@@ -39,6 +42,13 @@ def test_converter_and_validator_do_not_import_each_other(package: str, forbidde
 def test_common_imports_no_tools() -> None:
     imports = imported_top_level_modules(PACKAGES / "common" / "src")
     assert not {"specconv", "specval", "specweb"} & set(imports)
-    third_party = set(imports) - {"__future__", "common", "dataclasses", "datetime", "json",
-                                  "pathlib", "typing"}
+    third_party = set(imports) - {
+        "__future__",
+        "common",
+        "dataclasses",
+        "datetime",
+        "json",
+        "pathlib",
+        "typing",
+    }
     assert third_party == {"yaml"}

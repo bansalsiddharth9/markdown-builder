@@ -128,6 +128,7 @@ All packages installed in the project environment (direct and indirect), excludi
 | rich | 15.0.0 | MIT |
 | rpds-py | 2026.9.1 | MIT |
 | rtree | 1.4.1 | MIT |
+| ruff | 0.17.5 | MIT |
 | safetensors | 0.8.0 | Apache-2.0 |
 | scipy | 1.18.1 | BSD |
 | semchunk | 3.2.5 | MIT |

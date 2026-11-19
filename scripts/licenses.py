@@ -23,9 +23,23 @@ OWN_PACKAGES = {"common", "specconv", "specval", "specweb", "spec-md"}
 # Licenses allowed for use inside a company. Anything else fails --check
 # until a person reviews it and adds it here.
 ALLOWED = {
-    "0BSD", "Apache-2.0", "BSD", "BSD-2-Clause", "BSD-3-Clause", "BSL-1.0", "CC0-1.0",
-    "CNRI-Python", "ISC", "LLVM-exception", "MIT", "MIT-0", "MIT-CMU", "MPL-2.0", "PSF-2.0",
-    "Zlib", "dependency licenses",
+    "0BSD",
+    "Apache-2.0",
+    "BSD",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "BSL-1.0",
+    "CC0-1.0",
+    "CNRI-Python",
+    "ISC",
+    "LLVM-exception",
+    "MIT",
+    "MIT-0",
+    "MIT-CMU",
+    "MPL-2.0",
+    "PSF-2.0",
+    "Zlib",
+    "dependency licenses",
 }
 
 # Classifier / free-text labels -> SPDX ids
@@ -42,22 +56,42 @@ NORMALIZE = {
 
 SYSTEM_TOOLS = [
     # name, version, license, how it is used
-    ("Pandoc", "3.14", "GPL-2.0-or-later",
-     "run as a separate program (HTML and DOCX conversion); not linked or distributed"),
-    ("Chromium headless shell (Playwright build)", "159.0.8154.6", "BSD-3-Clause and others",
-     "headless browser for render: browser fetching; installed by 'playwright install chromium'"),
-    ("FFmpeg (Playwright build)", "1013", "LGPL-2.1-or-later",
-     "downloaded by Playwright alongside Chromium; not used by specconv"),
+    (
+        "Pandoc",
+        "3.14",
+        "GPL-2.0-or-later",
+        "run as a separate program (HTML and DOCX conversion); not linked or distributed",
+    ),
+    (
+        "Chromium headless shell (Playwright build)",
+        "159.0.8154.6",
+        "BSD-3-Clause and others",
+        "headless browser for render: browser fetching; installed by 'playwright install chromium'",
+    ),
+    (
+        "FFmpeg (Playwright build)",
+        "1013",
+        "LGPL-2.1-or-later",
+        "downloaded by Playwright alongside Chromium; not used by specconv",
+    ),
     ("uv", "0.13.9", "MIT OR Apache-2.0", "environment and lock file management"),
     ("Python", "3.12", "PSF-2.0", "runtime"),
 ]
 
 MODEL_WEIGHTS = [
     # repository, revision, license, use
-    ("docling-project/docling-layout-heron", "main (see note)", "Apache-2.0",
-     "Docling layout model (default)"),
-    ("docling-project/docling-models", "v2.3.0", "CDLA-Permissive-2.0, Apache-2.0",
-     "TableFormer table structure model (accurate mode)"),
+    (
+        "docling-project/docling-layout-heron",
+        "main (see note)",
+        "Apache-2.0",
+        "Docling layout model (default)",
+    ),
+    (
+        "docling-project/docling-models",
+        "v2.3.0",
+        "CDLA-Permissive-2.0, Apache-2.0",
+        "TableFormer table structure model (accurate mode)",
+    ),
 ]
 
 
@@ -66,8 +100,11 @@ def _license_of(dist) -> str:
     expr = meta.get("License-Expression")
     if expr:
         return expr.strip()
-    classifiers = [c.split("::")[-1].strip() for c in (meta.get_all("Classifier") or [])
-                   if c.startswith("License ::")]
+    classifiers = [
+        c.split("::")[-1].strip()
+        for c in (meta.get_all("Classifier") or [])
+        if c.startswith("License ::")
+    ]
     # "License :: OSI Approved" alone says nothing; keep the specific classifier.
     specific = [c for c in classifiers if c != "OSI Approved"]
     classifiers = specific or classifiers
@@ -149,8 +186,11 @@ def render(packages: list[tuple[str, str, str]]) -> str:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--check", action="store_true",
-                        help="do not write; exit 1 if LICENSES.md is stale or a license is not allowed")
+    parser.add_argument(
+        "--check",
+        action="store_true",
+        help="do not write; exit 1 if LICENSES.md is stale or a license is not allowed",
+    )
     args = parser.parse_args()
     packages = collect()
     bad = disallowed(packages)
@@ -158,7 +198,10 @@ def main() -> int:
     if args.check:
         stale = not LICENSES_MD.exists() or LICENSES_MD.read_text(encoding="utf-8") != text
         if stale:
-            print("LICENSES.md is out of date; run: uv run python scripts/licenses.py", file=sys.stderr)
+            print(
+                "LICENSES.md is out of date; run: uv run python scripts/licenses.py",
+                file=sys.stderr,
+            )
         for line in bad:
             print(f"license not on the allowed list: {line}", file=sys.stderr)
         return 1 if stale or bad else 0

@@ -44,8 +44,9 @@ def find_pandoc() -> Path | None:
 
 def pandoc_version(pandoc: Path) -> str:
     """Return e.g. '3.14'. Raises RuntimeError if the output is not recognised."""
-    out = subprocess.run([str(pandoc), "--version"], capture_output=True, text=True,
-                         timeout=30, check=True).stdout
+    out = subprocess.run(
+        [str(pandoc), "--version"], capture_output=True, text=True, timeout=30, check=True
+    ).stdout
     match = re.match(r"pandoc(?:\.exe)?\s+(\d+(?:\.\d+)*)", out)
     if not match:
         raise RuntimeError(f"unrecognised 'pandoc --version' output: {out[:80]!r}")
@@ -55,14 +56,22 @@ def pandoc_version(pandoc: Path) -> str:
 def check_python() -> list[DependencyProblem]:
     if sys.version_info < MIN_PYTHON:
         need = ".".join(map(str, MIN_PYTHON))
-        return [DependencyProblem("python", f"Python {need}+ required, running {sys.version.split()[0]}",
-                                  f"install Python {need}+ and recreate the environment with 'uv sync --all-packages'")]
+        return [
+            DependencyProblem(
+                "python",
+                f"Python {need}+ required, running {sys.version.split()[0]}",
+                f"install Python {need}+ and recreate the environment "
+                "with 'uv sync --all-packages'",
+            )
+        ]
     return []
 
 
 def check_pandoc() -> list[DependencyProblem]:
-    hint = ("download Pandoc 3.x from https://github.com/jgm/pandoc/releases and put the "
-            "'pandoc' binary on PATH or in .venv/bin")
+    hint = (
+        "download Pandoc 3.x from https://github.com/jgm/pandoc/releases and put the "
+        "'pandoc' binary on PATH or in .venv/bin"
+    )
     pandoc = find_pandoc()
     if pandoc is None:
         return [DependencyProblem("pandoc", "not found on PATH or in the environment", hint)]
@@ -79,8 +88,11 @@ def check_python_package(dist: str, hint: str | None = None) -> list[DependencyP
     try:
         version(dist)
     except PackageNotFoundError:
-        return [DependencyProblem(dist, "Python package not installed",
-                                  hint or "run 'uv sync --all-packages'")]
+        return [
+            DependencyProblem(
+                dist, "Python package not installed", hint or "run 'uv sync --all-packages'"
+            )
+        ]
     return []
 
 

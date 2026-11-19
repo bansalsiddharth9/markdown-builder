@@ -54,8 +54,14 @@ class FrontMatter:
         problems: list[str] = []
         if not isinstance(self.id, str) or not self.id:
             problems.append("id must be a non-empty string")
-        for name in ("title", "spec_version", "source_file", "source_sha256",
-                     "converted_with", "converted_at"):
+        for name in (
+            "title",
+            "spec_version",
+            "source_file",
+            "source_sha256",
+            "converted_with",
+            "converted_at",
+        ):
             if not isinstance(getattr(self, name), str):
                 problems.append(f"{name} must be a string")
         if self.source_type not in SOURCE_TYPES:
@@ -110,7 +116,7 @@ def split_front_matter(text: str) -> tuple[str | None, str]:
         return None, text
     for i in range(1, len(lines)):
         if lines[i].rstrip("\r") == DELIMITER:
-            return "\n".join(lines[1:i]), "\n".join(lines[i + 1:])
+            return "\n".join(lines[1:i]), "\n".join(lines[i + 1 :])
     raise FrontMatterError("front matter is not closed with '---'")
 
 

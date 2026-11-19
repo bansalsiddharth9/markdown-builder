@@ -43,7 +43,9 @@ def test_old_pandoc_reported(isolated_path: Path) -> None:
     assert "2.19.2" in problem.message and "3.x required" in problem.message
 
 
-def test_pandoc_found_in_venv_bin_without_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_pandoc_found_in_venv_bin_without_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     venv_bin = tmp_path / "venv" / "bin"
     _fake_pandoc(venv_bin, "pandoc 3.14")
     monkeypatch.setenv("PATH", str(tmp_path / "nothing"))

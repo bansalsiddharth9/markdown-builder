@@ -19,9 +19,12 @@ def in_tmp(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 @pytest.fixture
 def output(in_tmp: Path) -> Path:
     out = in_tmp / "output"
-    write_manifest(Manifest(entries=[
-        ManifestEntry(id="doc-a", source="a.pdf", source_type="pdf", status="ok")]),
-        out / "manifest.json")
+    write_manifest(
+        Manifest(
+            entries=[ManifestEntry(id="doc-a", source="a.pdf", source_type="pdf", status="ok")]
+        ),
+        out / "manifest.json",
+    )
     return out
 
 
