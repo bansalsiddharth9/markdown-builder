@@ -116,6 +116,7 @@ Inputs come from two places: files in an input folder, and web pages listed in `
 **Local files**
 
 - Recursively scan `input/` for `.pdf`, `.html`, `.htm`, `.docx`. Ignore other extensions and log them as skipped.
+- HTML pages saved with a browser's "Save page as, complete" come with a folder of the same name ending in `_files` that holds the images. Keep that folder next to the HTML file in `input/`; the converter resolves image paths relative to the HTML file, copies the images into `media/`, and reports any image it cannot find (V7 then fails for it).
 - `.doc` (legacy Word) is not supported in v1; log it as `unsupported`.
 
 **Web sources (`sources.yaml`)**
@@ -148,7 +149,15 @@ sources:
 
 - Fetch failure or non-200 status: record in the run report and continue with other sources.
 - Page that renders empty (under 500 characters of text after cleanup): flag as `suspect_empty` and suggest `render: browser`.
-- Relative links and image URLs: rewrite to absolute using the final URL before conversion.
+- Relative links and image URLs: rewrite to absolute using the final URL before conversion, except links that start with `#`, which are never changed.
+
+**Links back to the same document**
+
+Saved and fetched spec pages often write in-page links as the full address of the document itself. The TTML2 Recommendation saved from a browser, for example, has all 6,786 of its in-page links in the form `https://www.w3.org/TR/2018/REC-ttml2-20181108/#intro` and none as `#intro`. Converted as is, every such link would open the website instead of jumping within the Markdown.
+
+- Before conversion, rewrite every link whose address without the fragment equals the document's own URL into a fragment-only link (`#intro`). Treat `…/` and `…/index.html`, and `http` and `https`, as the same address. Links to other documents are left unchanged.
+- The document's own URL comes from, in this order: the `url` in `sources.yaml` and its final URL after redirects; for local files, the browser's `<!-- saved from url=(NNNN)… -->` comment; a `<link rel="canonical">` element; or an optional `self_urls` map (file name to URL) in `specconv.yaml`.
+- Record the number of rewritten links in `conversion.json`. If no own URL can be found, convert anyway and add the flag `self_url_unknown`.
 
 ## Converter (`specconv`)
 
@@ -197,13 +206,18 @@ pandoc SRC -f docx --track-changes=accept -t gfm --wrap=none --extract-media=OUT
 ```
 
 - `gfm` writes tables with merged cells as raw HTML; keep them as is.
-- Keep heading `id` attributes where Pandoc emits them, so cross-references can resolve.
+- Heading and element ids: GFM output drops `id` attributes set on headings and on `<section>` elements, which would break in-page links in W3C specs. A small Lua filter (`specconv/filters/anchors.lua`, run with `--lua-filter`) keeps every id that a link in the document targets:
+  - Ids on a heading, or on the `<section>` that contains it, are written as empty anchors on the heading line itself, for example `## <a id="sec-7"></a><a id="x-sec-7"></a>7 Modes`. Never on a separate line above the heading, so the anchor stays with its section when the document is split.
+  - Empty anchors already inside headings or definitions (`<h2><a id="intro"></a>1 Introduction</h2>`, the style of older W3C specs such as TTML2) are kept; Pandoc writes them as `<span id="intro"></span>`, which works the same way.
+  - Ids on table rows or cells: if the table stays raw HTML, the ids stay on the rows. If it becomes a pipe table, an empty anchor for each targeted row or cell id is placed just before the table, so the link lands on the right table.
+  - Any other targeted element (definitions, figures, examples) gets an empty anchor just before it. This is part of Pandoc's conversion, not a post-processing step. Do not use `+attributes`: its `{#id}` syntax shows literally in most viewers.
 - Collect Pandoc stderr warnings into `warnings`.
 
 **DoclingConverter**
 
 - `PdfPipelineOptions`: `do_ocr=False`, `do_table_structure=True`, `table_structure_options.mode=TableFormerMode.ACCURATE`, `table_structure_options.do_cell_matching=True`.
 - Images: export as referenced files in `media/` (image export mode `referenced`).
+- Tables with merged cells: any table with a row or column span is written as an HTML `<table>` with `rowspan`/`colspan`, taken from Docling's own HTML export of that table (check the current API, for example `TableItem.export_to_html()`), instead of a pipe table. This matches Pandoc's behavior, so PDF and HTML outputs look the same. Tables without merged cells stay pipe tables. A merged cell's text must never be repeated into the cells it covers.
 - Create the `DocumentConverter` once per run and reuse it; model loading is slow.
 - Also save the Docling document as JSON to `work/<id>.docling.json` for debugging.
 
@@ -236,7 +250,7 @@ output/
 ```
 
 - `<id>` is the `sources.yaml` id for web pages, otherwise a slug of the file name. Duplicate slugs get a numeric suffix.
-- `--split LEVEL` (default off) additionally writes one file per heading at that level into `sections/`, each with front matter naming its parent document and section number, plus an `index.md`. The full `<id>.md` is always written.
+- `--split LEVEL` (default off) additionally writes one file per heading at that level into `sections/`, each with front matter naming its parent document and section number, and with links to anchors in other sections rewritten to point at the right section file, plus an `index.md`. The full `<id>.md` is always written.
 
 ### Front matter
 
@@ -302,9 +316,15 @@ Each check returns `pass`, `warn`, `fail` or `not_applicable`, plus findings wit
 | V8 | Character confusion | Hex-like or numeric tokens containing `O`, `o`, `l`, `I`, `S` | Any hit in a table or code block; elsewhere warn |
 | V9 | Acceptance questions | Expected answer snippets from `acceptance.yaml` | An expected snippet is missing from the named document |
 
+**Anchors added by the converter**
+
+- V1, V2 and V3 strip `<a id>` and `<span id>` tags from headings and text before comparing, so the anchors never cause a mismatch with the source.
+- V7 counts the `id` of every `<a>`, `<span>` and HTML table element in the Markdown as a valid link target, alongside the heading slugs.
+- V7 warns on any link that still points to the document's own URL with a fragment, since it should have been rewritten to `#…`, and fails on any `#…` link whose target id is not in the document.
+
 **V3 text completeness details**
 
-- Normalize both sides: Unicode NFKC, collapse whitespace, strip Markdown syntax from the output, join words hyphenated across PDF line breaks.
+- Normalize both sides: Unicode NFKC, collapse whitespace, strip Markdown syntax and inline HTML tags (such as heading anchors) from the output, join words hyphenated across PDF line breaks.
 - Split the source into sentences; skip fragments under 20 characters (V4 covers short values).
 - A sentence is `present` on an exact substring match, `near` when rapidfuzz `partial_ratio` is at least 95, otherwise `missing`. Report coverage as present plus near, and list every missing sentence with its page or element path.
 - Compare by presence, not as a linear diff, because PDF extraction order can differ from Docling's reading order.
@@ -446,7 +466,7 @@ No login means anyone on the network can submit work, so the app protects itself
 
 - **Uploads:** maximum 100 MB per file and 20 files per job (configurable); allow only `.pdf`, `.html`, `.htm`, `.docx`, and check the file's actual type by its content, not just its extension; store under generated names, never the user's file name.
 - **URL fetching (server-side request forgery):** the server fetches URLs on users' behalf, so by default block private, loopback and link-local addresses, and re-check after redirects. A config allowlist can permit specific internal hosts.
-- **Rendering:** sanitize rendered Markdown HTML with nh3 before display, since converted tables can contain raw HTML. Show HTML sources only in a sandboxed iframe without scripts. Set a strict Content-Security-Policy.
+- **Rendering:** sanitize rendered Markdown HTML with nh3 before display, allowing the id attribute on anchor and span tags so in-page links keep working, since converted tables can contain raw HTML. Show HTML sources only in a sandboxed iframe without scripts. Set a strict Content-Security-Policy.
 - **Abuse limits:** cap queued jobs per client IP (default 5) and total queue length (default 50).
 - **Transport:** run behind a reverse proxy (Caddy or nginx) that terminates HTTPS with an internal certificate.
 - **Copyright reminder:** many standards are licensed documents, so the UI states that converted files are for internal reference only.
@@ -527,8 +547,8 @@ Manage with uv and commit the lock file; these tools change weekly, so versions 
 
 ### Testing
 
-- **Fixtures, all synthetic** (never commit copyrighted specs): small HTML specs with numbered sections, a merged-cell code table, an XML example and a WebVTT example; the same content as DOCX generated with python-docx; and as PDF generated by printing the HTML with Playwright `page.pdf()`. One image-only PDF for routing tests.
-- **Converter tests:** routing decisions, Pandoc and Docling outputs contain all fixture headings, tables and code blocks, post-processing leaves protected regions byte-identical, front matter carry-over on re-conversion, incremental skip.
+- **Fixtures, all synthetic** (never commit copyrighted specs): small HTML specs with numbered sections, a merged-cell code table, an XML example and a WebVTT example; the same content as DOCX generated with python-docx; and as PDF generated by printing the HTML with Playwright `page.pdf()`. One image-only PDF for routing tests. One page saved the way a browser's "Save page as, complete" does it: in-page links written as the document's full URL, a saved-from comment, images in a \_files folder, ids on a section and its heading, and a table whose rows are link targets.
+- **Converter tests:** routing decisions, Pandoc and Docling outputs contain all fixture headings, tables and code blocks, merged-cell tables come out as HTML with correct spans from both Pandoc and Docling, post-processing leaves protected regions byte-identical, front matter carry-over on re-conversion, incremental skip.
 - **Validator mutation tests (most important):** start from a known-good conversion, inject one defect at a time and assert the expected check fails and names the right location.
 
 | Injected defect | Must fail |
