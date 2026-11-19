@@ -4,14 +4,14 @@
 sets `validated` in the front matter (date, validator version, who), and only
 when the latest report has no fail findings, or the person gives --override
 with a reason, which is recorded in `manual_fixes`. The report must be for
-the Markdown as it is now (its SHA-256 is in the report), so an approval
-never covers edits made after the validation.
+the Markdown as it is now (the SHA-256 of its body is in the report), so an
+approval never covers edits to the text made after the validation; edits to
+the front matter (title, spec_version) are fine.
 """
 
 from __future__ import annotations
 
 import datetime as dt
-import hashlib
 import json
 import os
 from pathlib import Path
@@ -19,6 +19,7 @@ from pathlib import Path
 from common.frontmatter import parse_document, render_document
 
 from specval import __version__
+from specval.runner import body_sha256
 
 
 class ApproveError(RuntimeError):
@@ -44,7 +45,7 @@ def approve(
         raise ApproveError(f"{doc_id} was not converted; there is nothing to approve")
     md_path = output / doc_id / f"{doc_id}.md"
     data = md_path.read_bytes()
-    if hashlib.sha256(data).hexdigest() != report.get("markdown_sha256"):
+    if body_sha256(data.decode("utf-8")) != report.get("markdown_body_sha256"):
         raise ApproveError(
             f"{md_path} changed since it was validated ({report.get('validated_at')}); "
             f"run 'specval run --doc {doc_id}' again"

@@ -22,6 +22,13 @@ from common.frontmatter import FrontMatter, render_document  # noqa: E402
 from common.manifest import Manifest, ManifestEntry, write_manifest  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 
+BODY = (
+    "# Title\n\n"
+    'Text with ![fig](media/fig.png) and <span id="x"></span>[a link](#x).\n\n'
+    "<script>alert('x')</script>\n\n"
+    "| A | B |\n|---|---|\n| 1 | 2 |\n"
+)
+
 
 class FakeRunner:
     """Records the steps and writes what the real tools would write."""
@@ -59,7 +66,9 @@ class FakeRunner:
             folder = output / doc_id
             folder.mkdir(parents=True, exist_ok=True)
             fm = FrontMatter(id=doc_id, source_type=path.suffix[1:], source_file=path.name)
-            (folder / f"{doc_id}.md").write_text(render_document(fm, "# Title\n\nText.\n"))
+            (folder / f"{doc_id}.md").write_text(render_document(fm, BODY))
+            (folder / "media").mkdir(exist_ok=True)
+            (folder / "media" / "fig.png").write_bytes(b"\x89PNG fake")
             (folder / f"source{path.suffix}").write_bytes(path.read_bytes())
             entries.append(
                 ManifestEntry(id=doc_id, source=path.name, source_type=path.suffix[1:],
@@ -76,12 +85,52 @@ class FakeRunner:
         write_manifest(Manifest(entries=entries), output / "manifest.json")
 
     def validate(self, opts: dict[str, str]) -> None:
+        from specval.runner import body_sha256
+
         validation = Path(opts["--validation"])
         validation.mkdir(parents=True, exist_ok=True)
-        manifest = json.loads((Path(opts["--output"]) / "manifest.json").read_text())
+        output = Path(opts["--output"])
+        manifest = json.loads((output / "manifest.json").read_text())
         for entry in manifest["documents"]:
-            overall = self.validation if entry["status"] == "ok" else "not_converted"
-            (validation / f"{entry['id']}.json").write_text(json.dumps({"overall": overall}))
+            doc_id = entry["id"]
+            if entry["status"] != "ok":
+                report = {
+                    "id": doc_id,
+                    "overall": "not_converted",
+                    "checks": [],
+                    "review_queue": [],
+                }
+            else:
+                text = (output / doc_id / f"{doc_id}.md").read_text()
+                fail = self.validation == "fail"
+                finding = {
+                    "severity": "fail",
+                    "message": "image file missing: media/x.png",
+                    "md_line": 9,
+                    "source_loc": "page 2",
+                    "excerpt": "![x](media/x.png)",
+                }
+                report = {
+                    "id": doc_id,
+                    "overall": self.validation,
+                    "validated_at": "2026-11-19T00:00:00Z",
+                    "markdown_sha256": "",
+                    "markdown_body_sha256": body_sha256(text),
+                    "checks": [
+                        {"id": "V1", "name": "Structure counts", "status": "pass",
+                         "summary": "counts match", "findings": [], "details": {}},
+                        {"id": "V7", "name": "Markdown hygiene",
+                         "status": "fail" if fail else "pass", "summary": "",
+                         "findings": [finding] if fail else [], "details": {}},
+                    ],
+                    "review_queue": (
+                        [{"kind": "fail", "check": "V7", "text": finding["message"],
+                          "md_line": 9, "source_loc": "page 2", "excerpt": None}] if fail else []
+                    ) + [{"kind": "sample", "check": None, "text": "page 1: compare",
+                          "md_line": None, "source_loc": "page 1", "excerpt": None}],
+                }  # fmt: skip
+            (validation / f"{doc_id}.json").write_text(json.dumps(report))
+            (validation / f"{doc_id}.md").write_text(f"# Validation report: {doc_id}\n")
 
 
 @pytest.fixture

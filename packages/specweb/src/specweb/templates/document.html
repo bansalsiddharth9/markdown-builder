@@ -1,0 +1,83 @@
+{% extends "base.html" %}
+{% block title %}{{ doc.front_matter.title or doc_id }} · Spec converter{% endblock %}
+{% block content %}
+<p><a href="/jobs/{{ job_id }}">Job {{ job_id }}</a> › {{ doc_id }}</p>
+<h1>{{ doc.front_matter.title or doc.source_name }}</h1>
+<p class="meta">
+  Source: {{ doc.source_name }} ({{ doc.source_type }}) ·
+  Conversion: <span class="status s-{{ doc.status }}">{{ doc.status }}</span>
+  {% if doc.validation %} · Validation: <span class="status s-{{ doc.validation.overall }}">{{ doc.validation.overall }}</span>{% endif %}
+  {% if doc.approved_by or doc.approved_at %} · <strong>Approved{% if doc.approved_by %} by {{ doc.approved_by }}{% endif %}</strong> {{ doc.approved_at }}{% endif %}
+</p>
+{% if message %}<p class="{{ 'notice' if message == 'approved' else 'error' }}" role="status">{{ message }}</p>{% endif %}
+<p class="downloads">
+  <a href="{{ api }}/markdown" download="{{ doc_id }}.md">Download .md</a> ·
+  <a href="{{ api }}/download.zip">Download .zip (Markdown, media, report)</a> ·
+  <a href="{{ api }}/source">Original file</a>
+</p>
+<details class="metadata">
+  <summary>Title and version</summary>
+  <form method="post" action="{{ page }}/metadata" class="inline">
+    <label>Title <input type="text" name="title" value="{{ doc.front_matter.title }}" maxlength="300"></label>
+    <label>Spec version <input type="text" name="spec_version" value="{{ doc.front_matter.spec_version }}" maxlength="100"></label>
+    <button type="submit">Save</button>
+  </form>
+</details>
+<nav class="tabs">
+  {% for t in tabs %}<a href="{{ page }}?tab={{ t }}" class="{{ 'active' if t == tab }}">{{ {'rendered': 'Rendered', 'raw': 'Raw Markdown', 'side-by-side': 'Side by side', 'report': 'Report', 'review': 'Review queue'}[t] }}</a>{% endfor %}
+</nav>
+
+{% if tab == "rendered" %}
+<article class="markdown">{{ rendered | safe }}</article>
+
+{% elif tab == "raw" %}
+<pre class="raw">{% for n, line in lines %}<span id="L{{ n }}" class="line"><a class="ln" href="#L{{ n }}">{{ n }}</a>{{ line }}
+</span>{% endfor %}</pre>
+
+{% elif tab == "side-by-side" %}
+<div class="split">
+  <article class="markdown">{{ rendered | safe }}</article>
+  <div class="source-pane">
+    {% if source_kind == "pdf" %}
+      <iframe class="source" src="{{ api }}/source" title="Source PDF"></iframe>
+    {% elif source_kind in ("html", "htm") %}
+      <iframe class="source" sandbox="" src="{{ api }}/source" title="Source page (scripts disabled)"></iframe>
+    {% elif source_kind == "docx" %}
+      <p><a href="{{ api }}/source">Download the DOCX</a> · preview below</p>
+      <article class="markdown docx">{{ docx_preview | safe }}</article>
+    {% else %}
+      <p>No source preview.</p>
+    {% endif %}
+  </div>
+</div>
+
+{% elif tab == "report" %}
+{% if report_html %}<article class="markdown">{{ report_html | safe }}</article>{% else %}<p>No validation report yet.</p>{% endif %}
+
+{% elif tab == "review" %}
+{% if queue %}
+<ol class="queue">
+  {% for item in queue %}
+  <li>
+    <label><input type="checkbox" class="review-item" data-kind="{{ item.kind }}">
+      <span class="kind k-{{ item.kind }}">{{ item.kind }}</span>
+      {% if item.check %}<strong>{{ item.check }}</strong>{% endif %} {{ item.text }}</label>
+    {% if item.md_line %} · <a href="{{ page }}?tab=raw#L{{ item.md_line }}">Markdown line {{ item.md_line }}</a>{% endif %}
+    {% if item.source_loc %} · {% if source_kind == "pdf" and item.source_loc.startswith("page ") %}<a href="{{ api }}/source#page={{ item.source_loc[5:].split(',')[0] }}" target="_blank" rel="noopener">source {{ item.source_loc }}</a>{% else %}source: {{ item.source_loc }}{% endif %}{% endif %}
+    {% if item.excerpt %}<blockquote>{{ item.excerpt }}</blockquote>{% endif %}
+  </li>
+  {% endfor %}
+</ol>
+{% else %}
+<p>Nothing in the review queue.</p>
+{% endif %}
+<form method="post" action="{{ page }}/approve" class="approve" id="approve-form">
+  <label>Your name <input type="text" name="name" maxlength="200"></label>
+  <label>Override reason (needed if you approve without ticking every fail item)
+    <input type="text" name="override_reason" id="override" maxlength="500"></label>
+  <input type="hidden" name="fails_reviewed" id="fails-reviewed" value="">
+  <button type="submit" id="approve" {% if fail_items %}disabled{% endif %} data-fails="{{ fail_items }}">Approve</button>
+</form>
+<script src="/static/review.js"></script>
+{% endif %}
+{% endblock %}

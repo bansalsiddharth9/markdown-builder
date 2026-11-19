@@ -9,7 +9,7 @@
     <tr>
       <td>{{ doc.source_name }}{% if doc.render == "browser" %} (browser){% endif %}</td>
       <td>{{ doc.source_type }}</td>
-      <td>{% if doc.doc_id %}{{ doc.doc_id }}{% endif %}</td>
+      <td>{% if doc.doc_id and doc.status in ("ok", "skipped_unchanged") %}<a href="/documents/{{ job.id }}/{{ doc.doc_id }}">{{ doc.doc_id }}</a>{% elif doc.doc_id %}{{ doc.doc_id }}{% endif %}{% if doc.approved_at %} ✓ approved{% endif %}</td>
       <td><span class="status s-{{ doc.status }}">{{ doc.status }}</span>{% if doc.error %}<br><small>{{ doc.error }}</small>{% endif %}</td>
       <td>{% if doc.validation_status %}<span class="status s-{{ doc.validation_status }}">{{ doc.validation_status }}</span>{% endif %}</td>
     </tr>

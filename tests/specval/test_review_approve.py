@@ -129,3 +129,19 @@ def test_approve_refuses_unconverted(out: Path, tmp_path: Path, status: str) -> 
     validate_all(out, val)
     result = run("approve", DOC_IDS["html"], "--output", str(out), "--validation", str(val))
     assert result.exit_code == 1 and "not converted" in result.output
+
+
+def test_approve_allows_front_matter_edits_after_validation(out: Path, tmp_path: Path) -> None:
+    """Title and spec_version are filled in by hand (also from the web UI) and do
+    not change what was validated; only the body is compared."""
+    doc_id = DOC_IDS["html"]
+    val = tmp_path / "val"
+    validate_all(out, val)
+    path = md_path(out, doc_id)
+    path.write_text(
+        path.read_text(encoding="utf-8").replace("title: ''", "title: Sample spec", 1),
+        encoding="utf-8",
+    )
+    result = run("approve", doc_id, "--output", str(out), "--validation", str(val))
+    assert result.exit_code == 0, result.output
+    assert fm(out, doc_id)[0].title == "Sample spec"

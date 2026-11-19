@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block title %}Library · Spec converter{% endblock %}
+{% block content %}
+<h1>Library</h1>
+<p>Approved documents. Deleting or expiring a job does not remove them.</p>
+<table>
+  <thead><tr><th>Title</th><th>Version</th><th>Document</th><th>Approved</th><th>By</th><th>Download</th></tr></thead>
+  <tbody>
+  {% for d in items %}
+  <tr>
+    <td>{{ d.title or d.source_name }}</td>
+    <td>{{ d.spec_version }}</td>
+    <td>{{ d.doc_id }}{% if d.versions > 1 %} (approval {{ d.version }} of {{ d.versions }}){% endif %}</td>
+    <td>{{ d.approved_at }}{% if d.override_reason %}<br><small>override: {{ d.override_reason }}</small>{% endif %}</td>
+    <td>{{ d.approved_by or "" }}</td>
+    <td><a href="/library/{{ d.doc_id }}/{{ d.version }}/{{ d.doc_id }}.md" download>.md</a></td>
+  </tr>
+  {% else %}
+  <tr><td colspan="6">No approved documents yet.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

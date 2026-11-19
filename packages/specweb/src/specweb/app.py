@@ -6,21 +6,18 @@ its rows are polled every 2 seconds. No JavaScript build step.
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Annotated
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
-from fastapi.templating import Jinja2Templates
 
-from specweb import __version__, api
+from specweb import __version__, api, doc_routes
 from specweb.db import RUNNING, sessions
 from specweb.jobs import JobError, parse_urls_text
 from specweb.settings import WebConfig, load_config
+from specweb.templating import HERE, templates
 
-HERE = Path(__file__).resolve().parent
-templates = Jinja2Templates(directory=str(HERE / "templates"))
 JOB_STATUSES = ("queued", "fetching", "converting", "validating", "done", "error")
 
 
@@ -32,6 +29,7 @@ def create_app(cfg: WebConfig | None = None) -> FastAPI:
     app.state.config = cfg
     app.mount("/static", StaticFiles(directory=str(HERE / "static")), name="static")
     app.include_router(api.router)
+    app.include_router(doc_routes.router)
 
     @app.get("/", response_class=HTMLResponse)
     def upload_page(request: Request) -> HTMLResponse:

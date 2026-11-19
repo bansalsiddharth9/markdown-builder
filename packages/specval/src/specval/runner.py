@@ -47,7 +47,8 @@ class DocReport:
     validated_at: str = ""
     duration_s: float = 0.0
     review_queue: list[dict[str, Any]] = field(default_factory=list)
-    markdown_sha256: str | None = None  # of the <id>.md that was checked (for approve)
+    markdown_sha256: str | None = None  # of the <id>.md that was checked
+    markdown_body_sha256: str | None = None  # of its body, without front matter (for approve)
 
     @property
     def is_failure(self) -> bool:
@@ -70,9 +71,22 @@ class DocReport:
             "duration_s": self.duration_s,
             "notes": self.notes,
             "markdown_sha256": self.markdown_sha256,
+            "markdown_body_sha256": self.markdown_body_sha256,
             "checks": [c.to_dict() for c in self.checks],
             "review_queue": self.review_queue,
         }
+
+
+def body_sha256(text: str) -> str:
+    """SHA-256 of the Markdown without its front matter: title, spec_version
+    and manual_fixes are edited by hand and do not change what was validated."""
+    from common.frontmatter import FrontMatterError, split_front_matter
+
+    try:
+        body = split_front_matter(text)[1]
+    except FrontMatterError:
+        body = text
+    return hashlib.sha256(body.encode("utf-8")).hexdigest()
 
 
 def _source_file(folder: Path) -> Path | None:
@@ -193,5 +207,6 @@ def validate_document(
     report.review_queue = build_queue(entry.id, report.checks, md, reference, cfg)
     if full is not None:
         report.markdown_sha256 = hashlib.sha256(md_path.read_bytes()).hexdigest()
+        report.markdown_body_sha256 = body_sha256(full)
     report.duration_s = round(time.monotonic() - start, 3)
     return report
