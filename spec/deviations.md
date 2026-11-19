@@ -235,12 +235,29 @@ Pandoc only recognizes the paragraph style named exactly `Source Code` as code. 
 
 Real spec: TTML2 split at level 2 gives 42 section files and `index.md`; all 6,177 local links in them resolve (found and fixed while testing: Pandoc indents nested list content by 4 spaces, which must not be taken for code).
 
+## Real-spec run and README (phase 8)
+
+The design asks for one PDF with code tables, one W3C page and one DOCX. `input/` has no DOCX spec, so phase 8 used the three specs given (FS-3):
+
+| Spec | Converter | Validation | Time |
+| --- | --- | --- | --- |
+| CEA-608-E (PDF, 143 pages) | Docling | fail: genuine findings to review (FS-1 table count, a stray heading, contents rows and diagram text Docling dropped, extractor disagreements) | convert about 4 min, peak memory 5.6 GB; validate 52 s |
+| TTML2 (saved W3C page, 1.9 MB) | Pandoc | pass on all nine checks | convert 20 s; validate 27 s |
+| SAMI (HTML) | Pandoc | warn (web images, a heading level jump that is in the source) | convert 1 s; validate 5 s |
+
+Thresholds: the design defaults were kept. On these specs every fail and warn left after the fixes found during phases 5 and 6 is a real difference a person should look at, and the faithful conversions pass, so there was nothing to tune.
+
+Host sizing (design open question): one PDF worker needs about 6 GB of memory; this host converted 143 pages in about 4 minutes on CPU.
+
+`README.md` covers setup (uv, Pandoc 3.14 in `.venv/bin`, Chromium in `.playwright/`, pinned models), daily use (convert, validate, review queue, approve, split), configuration, outputs, PDF limitations and development commands.
+
 ## Future scope (to be checked later)
 
 | # | Topic | Detail | Possible approach |
 | --- | --- | --- | --- |
 | FS-1 | V1 table count for PDFs is misleading | pdfplumber, the second PDF reader, counts diagrams with drawn boxes as tables and cannot see tables without ruled lines. CEA-608-E: it finds 4 "tables" in Figures 2, 7 and 8 (PDF pages 26, 101, 104; all cells empty) and misses the two abbreviation lists (pages 18–19), so V1 reports 72 against the Markdown's 70 and fails although no table is missing (checked by the user, 2026-11-19). V1 also gives only the totals, not where they differ. | Report the pages where the counts differ; ignore pdfplumber tables whose cells are all empty or that lie on a Docling picture; reconsider in phase 6 together with V5, which pairs tables by page. |
 | FS-2 | V6 lists TTML2's syntax boxes (`count = xsd:integer`) as "XML not well-formed (the source has the same problem)" | They start with `<` and contain closing tags, so they are parsed; the findings are info only and do not change the status, but they make the report long. | Recognize the W3C "syntax" box (class `syntax` on the source table) and skip XML parsing for it. |
+| FS-3 | No real DOCX spec has been converted yet | Phase 8 asks for one; `input/` has none. The DOCX path is tested with the synthetic fixture only. | Convert and validate a real DOCX spec when one is available; check the DOCX code-style question (phase 5 open question) at the same time. |
 
 ## Web application still open (affect phases 9 to 11)
 
