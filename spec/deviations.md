@@ -20,6 +20,7 @@ Status: **open** = waiting for a decision; **accepted** = confirmed by the proje
 | E7 | — | `scripts/licenses.py` generates `LICENSES.md`; `tests/test_licenses.py` fails if the file is stale or any installed package has a license outside an allowed list | Enforces design principle 5 automatically whenever dependencies change. | implemented |
 | E8 | — | Both Docling models pinned to commits (layout `8f39ad3c…`, TableFormer `fc0f2d45…` = tag v2.3.0) in `specconv/models.py`; downloaded once into `models/` (git-ignored, ~500 MB) with the new `specconv download-models`; new config key `pdf.models_path`; Docling runs with `HF_HUB_OFFLINE=1`. `convert` exits 2 with a hint when a PDF needs converting and the models are missing. | Docling otherwise downloads its layout model from the moving revision `main`; reproducible output needs fixed weights, and conversion should never use the network. | implemented |
 | E9 | — | `ruff` (MIT) added as a pinned dev tool; code formatted with it; lint rules fixed explicitly in `pyproject.toml` (`E, F, W, I, B, UP`, line length 100) | Consistent formatting across phases; an explicit rule set does not change when ruff's defaults do. | implemented |
+| E10 | — | `soupsieve==4.1.2` (MIT) is now a direct, pinned dependency of `specconv` | It was already installed with BeautifulSoup; `drop_selectors` are now checked with it when `sources.yaml` is loaded (F14). | implemented |
 
 ## Converter (phase 2)
 
@@ -82,6 +83,31 @@ W3C specs such as TTML2 wrap every example in a one-cell table: `<table class="e
 
 On TTML2 this unwraps 329 tables: 120 examples and 138 syntax boxes (all with a `<pre>`), 63 image boxes, 7 formula boxes and 1 text box. The 9 tables with more than one cell are unchanged.
 
+## Fetching (phase 4)
+
+| # | Design says | Implementation | Why | Status |
+| --- | --- | --- | --- | --- |
+| F1 | A cached fetch is reused unless `--refetch` | The cache is also not used when the source's `url` or `render` changed in `sources.yaml`, the saved HTML no longer matches the SHA-256 in its sidecar, or the sidecar is unreadable | A stale cache would silently convert the wrong page. | implemented |
+| F2 | Non-200 status is a failure | Also a failure: a content type other than HTML (e.g. a URL that serves a PDF), with the hint to put the file in the input folder | Web sources are always converted as HTML. | implemented |
+| F3 | 3 retries | Retried: network errors, timeouts, HTTP 408, 425, 429 and 5xx, waiting 1, 2, 4 s between attempts. Other 4xx (e.g. 404) fail at once. Same rules for `render: browser`. | A missing page will not appear on a second try; a busy server may. | implemented |
+| F4 | — | A failed `--refetch` keeps the earlier cached copy; the log says so, and the command exits 1 | Never lose a good page because the site was down once. | implemented |
+| F5 | — | The page's encoding is taken from the HTTP `Content-Type` charset when present, and is UTF-8 for `render: browser` (saved from `page.content()`); it overrides a `<meta charset>` in the page | HTML's own rule (the header wins); a browser-rendered page keeps its original `<meta>`, which no longer matches the saved bytes. | implemented |
+| F6 | Sidecar: URL, final URL, HTTP status, fetch time, render mode | Also: content type, encoding, SHA-256, size, user agent, specconv version, duration | Needed for F1 and F5, and for the run report. | implemented |
+| F7 | `clean: main-content` removes `<nav>`, `<header>`, `<footer>`, `<aside>`; keeps only `<main>` or `<article>` | Keeps the first `<main>`; without one, all top-level `<article>` elements. `<nav>` and `<aside>` are removed everywhere; `<header>` and `<footer>` only outside `<main>`, `<article>` and `<section>`. Then `drop_selectors`. What was kept and removed is in `conversion.json`. | Inside an article or section, `<header>` usually holds its title (HTML's own meaning); removing it would drop headings. A page can have several articles. | implemented |
+| F8 | Relative links and image URLs become absolute | Attributes changed: `href` on `a`, `area`, `link`; `src` on `img`, `source`, `track`, `video`, `audio`, `iframe`, `embed`; `data` on `object`. A `<base href>` is honoured. Links to the page itself (e.g. `./#intro`, `index.html#b`) then become `#…` by the self-link rule. | Complete list instead of "links and images"; HTML's own base rule. | implemented |
+| F9 | Under 500 characters of text after cleanup: flag `suspect_empty`, suggest `render: browser` | Counts non-whitespace characters, as for PDFs; the page is still converted, with the flag and a warning; the `render: browser` hint only for static pages | Same counting as the PDF text-layer check; the flag asks a person to look, it does not decide. | implemented |
+| F10 | — | Every `<main>` becomes a `<div>` with the same attributes before conversion, for all HTML (local and fetched) | **Content loss found:** when a page has a `<main>`, Pandoc 3.14's HTML reader silently drops everything outside it, even with `clean: none`. None of the current real specs has a `<main>`, but many web pages do. | implemented |
+| F11 | Fetched page: `source.<ext>` is the fetched HTML | `source.html` is the cached page byte for byte; front matter has `source_url`, `fetched_at` and an empty `source_file`; the manifest records `httpx` or `playwright` in `tool_versions` | `source_file` names a file in the input folder, which a web page does not have. | implemented |
+| F12 | `convert` fetches sources not yet cached | Chromium is only required for `render: browser` sources that are not cached yet (both `fetch` and `convert`) | Converting from the cache needs no browser. | implemented |
+| F13 | — | A web source's options in the manifest include its `url`, `render`, `clean`, `drop_selectors`, final URL and encoding, so changing `clean` re-converts from the cache without fetching again | Same rule as other options (D1). | implemented |
+| F14 | — | `drop_selectors` are checked when `sources.yaml` is loaded; an invalid CSS selector is a config error (exit 2) | Fail before any work starts (D3). | implemented |
+| F15 | No network access in tests | An autouse test fixture blocks every connection that is not to the local machine; fetch tests use a local HTTP server, including the Chromium tests | Enforced instead of only promised. | implemented |
+| F16 | Relative image URLs become absolute (images stay on the web) | `fetch` downloads every `<img src>` image of the page, from any site, into `work/fetched/<id>_files/` and lists each one (URL, file, SHA-256, size, content type) in the sidecar; `convert` copies them into `media/` like a saved page's `_files` folder, still without network. An image that cannot be downloaded (HTTP error, an HTML page instead of an image, over 50 MB) does not fail the fetch: it keeps its web link and the document gets a warning. Same image URL: one download; same file name from two URLs: `x.png`, `x-2.png`. The cache is stale if a downloaded image is missing or changed; a changed image re-converts the document. | Decided by the user (option B, 2026-11-19): the library must keep its figures when the site moves or the reader is offline. | implemented |
+
+### Live check
+
+`specconv fetch` + `convert` on the TTML2 entry in `config/sources.yaml` (fetched from w3.org on 2026-11-19): HTTP 200, 1.6 MB; own URLs from `sources.yaml` and the canonical link; the live page already uses `#…` links (0 self-links to rewrite); all 5,308 in-page links resolve; 329 one-cell tables unwrapped, all 272 examples fenced code blocks; 86 relative links made absolute; all 83 images downloaded by `fetch` and copied into `media/` (F16), every image link points to a local file; no warnings.
+
 ## Real specs (phase 3 run on `input/`)
 
 | Spec | Result |
@@ -111,7 +137,7 @@ These are not fixed in the converter (design principle 1: never "fix" content). 
 | C5 | `convert --input input/ --sources sources.yaml` | Both are optional, but at least one is required | Allows converting only files or only web pages. | implemented |
 | C6 | A log file per run | `convert` → `output/run-<timestamp>.log`; `fetch` → `work/fetch-<timestamp>.log`; `specval run` → `validation/run-<timestamp>.log` | The design only names the `convert` log location. | implemented |
 | C8 | — | New command `specconv download-models [--force]` | Fetches the pinned Docling models (E8); needed once per machine and in the Docker image. | implemented |
-| C7 | — | Commands not built yet exit with code 1 and say "not implemented yet (phase N)" | Design principle 3: fail loudly, never pretend to succeed. Removed as each phase lands (`convert`: phase 2; `--split` exits 2 until phase 7). | implemented |
+| C7 | — | Commands not built yet exit with code 1 and say "not implemented yet (phase N)" | Design principle 3: fail loudly, never pretend to succeed. Removed as each phase lands (`convert`: phase 2; `fetch`: phase 4; `--split` exits 2 until phase 7). | implemented |
 
 ## Data formats
 

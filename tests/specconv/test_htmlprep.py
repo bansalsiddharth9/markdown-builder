@@ -197,3 +197,129 @@ def test_pre_with_code_left_alone(tmp_path: Path) -> None:
     html = '<pre>\n<code class="language-xml">&lt;a/&gt;</code>\n</pre>'
     result = prep(html, tmp_path)
     assert html in result.html and result.pre_given_code == 0
+
+
+# ------------------------------------------- web sources: links, cleanup
+
+
+def web(html: str | bytes, tmp_path: Path, **kw):
+    data = html.encode("utf-8") if isinstance(html, str) else html
+    return prepare_html(data, strip_tags=STRIP, media_dir=tmp_path / "m", **kw)
+
+
+def test_relative_links_made_absolute_hash_links_unchanged(tmp_path: Path) -> None:
+    html = (
+        '<a href="#intro">a</a><a href="../other/">b</a><a href="mailto:x@y.org">c</a>'
+        '<img src="img/fig.png"><img src="//cdn.example.org/i.png">'
+        '<a href="https://elsewhere.org/x">d</a>'
+    )
+    result = web(html, tmp_path, page_url="https://w3.org/TR/spec/")
+    assert '<a href="#intro">' in result.html
+    assert '<a href="https://w3.org/TR/other/">' in result.html
+    assert '<a href="mailto:x@y.org">' in result.html
+    assert 'src="https://w3.org/TR/spec/img/fig.png"' in result.html
+    assert 'src="https://cdn.example.org/i.png"' in result.html
+    assert result.links_made_absolute == 3
+    assert result.images_remote == 2 and not result.images_copied
+
+
+def test_base_href_used_for_absolute_links(tmp_path: Path) -> None:
+    html = '<head><base href="/assets/"></head><img src="a.png">'
+    result = web(html, tmp_path, page_url="https://ex.org/docs/page")
+    assert 'src="https://ex.org/assets/a.png"' in result.html
+
+
+def test_relative_links_to_own_page_become_hash_links(tmp_path: Path) -> None:
+    html = '<a href="./#intro">a</a><a href="index.html#b">b</a><a href="?x=1#c">c</a>'
+    final = "https://w3.org/TR/2018/REC-x/"
+    result = web(
+        html,
+        tmp_path,
+        page_url=final,
+        known_urls=[OwnUrl("https://w3.org/TR/x/", "sources.yaml"), OwnUrl(final, "final URL")],
+    )
+    assert '<a href="#intro">' in result.html and '<a href="#b">' in result.html
+    assert 'href="https://w3.org/TR/2018/REC-x/?x=1#c"' in result.html  # other query: other page
+    assert result.self_links_rewritten == 2
+
+
+def test_encoding_override_beats_meta(tmp_path: Path) -> None:
+    html = '<meta charset="iso-8859-1"><p>Café</p>'.encode()  # UTF-8 bytes, wrong meta
+    assert "Café" in web(html, tmp_path, encoding="utf-8").html
+    assert "Café" not in web(html, tmp_path / "b").html  # the meta alone misleads
+
+
+MAIN_PAGE = (
+    "<html><head><title>T</title></head><body>"
+    "<header>Site banner</header><nav>Menu</nav>"
+    "<main><header><h1>Spec title</h1></header><nav>Page toc</nav>"
+    "<section><header>Section intro</header><p>Body text</p><aside>Side</aside></section>"
+    '<div class="ad">Buy</div><footer>Main footer</footer></main>'
+    "<aside>Related</aside><footer>Site footer</footer></body></html>"
+)
+
+
+def test_main_content_keeps_main_only(tmp_path: Path) -> None:
+    result = web(MAIN_PAGE, tmp_path, clean="main-content", drop_selectors=[".ad"])
+    for kept in ("Spec title", "Section intro", "Body text", "Main footer", "<title>T</title>"):
+        assert kept in result.html, kept
+    for gone in ("Site banner", "Menu", "Page toc", "Side", "Buy", "Related", "Site footer"):
+        assert gone not in result.html, gone
+    assert result.main_content == {"kept": "main", "removed": {"nav": 1, "aside": 1, ".ad": 1}}
+
+
+def test_main_content_articles_when_no_main(tmp_path: Path) -> None:
+    html = (
+        "<body><header>Banner</header><article><header><h1>A</h1></header><p>a</p>"
+        "<article><p>nested</p></article></article><p>between</p><article><p>b</p></article>"
+        "<footer>Foot</footer></body>"
+    )
+    result = web(html, tmp_path, clean="main-content")
+    assert "<h1>A</h1>" in result.html and "nested" in result.html and "<p>b</p>" in result.html
+    assert "between" not in result.html and "Banner" not in result.html
+    assert result.main_content["kept"] == "article"
+
+
+def test_main_content_without_main_or_article(tmp_path: Path) -> None:
+    html = "<body><header>Banner</header><nav>Menu</nav><p>Body</p><footer>Foot</footer></body>"
+    result = web(html, tmp_path, clean="main-content")
+    assert "Body" in result.html
+    assert "Banner" not in result.html and "Menu" not in result.html and "Foot" not in result.html
+    assert result.main_content == {
+        "kept": "body",
+        "removed": {"nav": 1, "header": 1, "footer": 1},
+    }
+
+
+def test_clean_none_keeps_everything(tmp_path: Path) -> None:
+    result = web(MAIN_PAGE, tmp_path)
+    assert "Site banner" in result.html and "Related" in result.html
+    assert result.main_content is None
+
+
+def test_text_chars_counted_after_cleanup(tmp_path: Path) -> None:
+    result = web("<body><nav>Menu text</nav><p>a b c</p></body>", tmp_path, clean="main-content")
+    assert result.text_chars == 3
+
+
+def test_main_renamed_so_pandoc_keeps_the_rest(tmp_path: Path) -> None:
+    result = web('<p>Before</p><main id="m" class="c"><p>In</p></main><p>After</p>', tmp_path)
+    assert '<p>Before</p><div class="c" id="m"><p>In</p></div><p>After</p>' in result.html
+    assert result.main_renamed == 1
+
+
+def test_downloaded_images_copied_into_media(tmp_path: Path) -> None:
+    fig = tmp_path / "cache" / "fig.png"
+    fig.parent.mkdir()
+    fig.write_bytes(b"png")
+    html = '<img src="img/fig.png"><img src="img/fig.png#v"><img src="other.png">'
+    result = web(
+        html,
+        tmp_path,
+        page_url="https://ex.org/spec/",
+        downloaded_images={"https://ex.org/spec/img/fig.png": fig},
+    )
+    assert result.html.count('src="m/fig.png"') == 2
+    assert 'src="https://ex.org/spec/other.png"' in result.html
+    assert result.images_copied == ["m/fig.png"] and (tmp_path / "m/fig.png").read_bytes() == b"png"
+    assert result.images_downloaded == 2 and result.images_remote == 1

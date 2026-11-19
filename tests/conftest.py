@@ -23,3 +23,21 @@ def write(tmp_path: Path):
         return path
 
     return _write
+
+
+@pytest.fixture(autouse=True)
+def _no_internet(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Design: no network access in tests. Python code may only connect to the
+    local machine (the test HTTP server, Playwright's driver)."""
+    import socket
+
+    real_connect = socket.socket.connect
+
+    def guarded(self, address):  # type: ignore[no-untyped-def]
+        if self.family in (socket.AF_INET, socket.AF_INET6):
+            host = address[0]
+            if host not in ("127.0.0.1", "::1", "localhost"):
+                raise OSError(f"test tried to reach the network: {address!r}")
+        return real_connect(self, address)
+
+    monkeypatch.setattr(socket.socket, "connect", guarded)

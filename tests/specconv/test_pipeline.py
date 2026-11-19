@@ -246,15 +246,6 @@ def test_split_not_yet_available(input_dir: Path) -> None:
     assert result.exit_code == 2 and "phase 7" in result.output
 
 
-def test_web_sources_fail_until_fetching_exists(input_dir: Path, write) -> None:
-    write("s.yaml", "sources:\n  - {id: ttml2, url: https://www.w3.org/TR/ttml2/}\n")
-    result = convert("--sources", "s.yaml")
-    assert result.exit_code == 1
-    entry = read_manifest(Path("output/manifest.json")).get("ttml2")
-    assert entry.status == "failed" and "phase 4" in entry.error
-    assert entry.source == "https://www.w3.org/TR/ttml2/"
-
-
 @pytest.mark.parametrize(
     "name, slug",
     [

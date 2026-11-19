@@ -13,6 +13,7 @@ import typer
 from common.manifest import ManifestError
 
 from specconv import __version__, deps, models, routing
+from specconv import fetch as fetching
 from specconv import manifest as manifest_io
 from specconv.config import ConfigError, Source, SpecconvConfig, load_config, load_sources
 from specconv.pipeline import Pipeline
@@ -109,13 +110,53 @@ def fetch(
         cfg,
         need_pandoc=False,
         need_docling=False,
-        need_chromium=any(s.render == "browser" for s in selected),
+        need_chromium=any(
+            s.render == "browser" and (refetch or fetching.load_cached(work, s) is None)
+            for s in selected
+        ),
     )
+    failed: list[str] = []
     with run_logging(work / f"fetch-{run_timestamp()}.log", verbose) as log:
         log.info("specconv %s fetch: %d source(s), refetch=%s", __version__, len(selected), refetch)
         log.debug("tool versions: %s", deps.tool_versions())
-        log.error("fetch is not implemented yet (build phase 4)")
-    raise typer.Exit(EXIT_FAILED)
+        for source in selected:
+            try:
+                outcome = fetching.fetch_source(source, cfg.fetch, work, refetch=refetch)
+            except fetching.FetchError as exc:
+                failed.append(source.id)
+                kept = fetching.load_cached(work, source)
+                log.error(
+                    "%s: fetch failed: %s%s",
+                    source.id,
+                    exc,
+                    f"; the cached copy from {kept.record.fetched_at} was kept" if kept else "",
+                )
+                continue
+            record = outcome.record
+            if outcome.from_cache:
+                log.info(
+                    "%s: cached (fetched %s; use --refetch to download again)",
+                    source.id,
+                    record.fetched_at,
+                )
+            else:
+                log.info(
+                    "%s: fetched %s (%s, HTTP %d, %d bytes%s) -> %s",
+                    source.id,
+                    record.url,
+                    record.render,
+                    record.status,
+                    record.bytes,
+                    f", final URL {record.final_url}" if record.final_url != record.url else "",
+                    outcome.html_path,
+                )
+        log.info(
+            "done: %d fetched or cached, %d failed%s",
+            len(selected) - len(failed),
+            len(failed),
+            f" ({', '.join(failed)})" if failed else "",
+        )
+    raise typer.Exit(EXIT_FAILED if failed else EXIT_OK)
 
 
 @app.command()
@@ -174,7 +215,13 @@ def convert(
         cfg,
         need_pandoc=True,
         need_docling=True,
-        need_chromium=any(d.source is not None and d.source.render == "browser" for d in docs),
+        # Chromium only for browser sources that are not in the fetch cache yet.
+        need_chromium=any(
+            d.source is not None
+            and d.source.render == "browser"
+            and fetching.load_cached(work, d.source) is None
+            for d in docs
+        ),
         need_models=any(d.source_type == "pdf" for d in docs),
     )
 

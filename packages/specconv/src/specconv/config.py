@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+import soupsieve
 import yaml
 
 DEFAULT_CONFIG_PATH = Path("config/specconv.yaml")
@@ -257,6 +258,14 @@ def load_sources(path: Path) -> list[Source]:
             drop = _str_list(item["drop_selectors"], f"{where}.drop_selectors")
             if clean != "main-content":
                 raise ConfigError(f"{where}.drop_selectors: only allowed with clean: main-content")
+            for selector in drop:
+                try:
+                    soupsieve.compile(selector)
+                except soupsieve.SelectorSyntaxError as exc:
+                    raise ConfigError(
+                        f"{where}.drop_selectors: invalid CSS selector {selector!r}: "
+                        f"{str(exc).splitlines()[0]}"
+                    ) from exc
 
         sources.append(Source(id=sid, url=url, render=render, clean=clean, drop_selectors=drop))
     return sources

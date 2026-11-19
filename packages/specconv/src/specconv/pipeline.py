@@ -16,6 +16,11 @@ Incremental runs (design: Incremental runs): a document is skipped and
 marked skipped_unchanged when its source SHA-256, converter version and
 options hash match the previous manifest entry and its output exists.
 --force converts everything again.
+
+Web sources (design: Web sources) are converted from the fetch cache in
+work/fetched/; a source that is not cached yet is fetched first. Their
+source.html is the fetched page, and a page with under 500 characters of
+text after cleanup is flagged suspect_empty.
 """
 
 from __future__ import annotations
@@ -41,6 +46,7 @@ from specconv.config import SpecconvConfig
 from specconv.converters.base import MEDIA_DIR, ConversionError, ConversionResult
 from specconv.converters.docling import DoclingConverter
 from specconv.converters.pandoc import PandocConverter
+from specconv.fetch import FetchError, FetchOutcome, fetch_source
 from specconv.frontmatter import carry_over, read_previous
 from specconv.htmlprep import OwnUrl, PreparedHtml, prepare_html
 from specconv.postprocess import PostprocessError, postprocess
@@ -49,9 +55,11 @@ from specconv.textlayer import FLAG_MIXED, PdfReadError, TextLayer, check_text_l
 
 log = logging.getLogger("specconv.pipeline")
 
-RECIPE_VERSION = 4  # bump when HTML preparation, filters or post-processing change
+RECIPE_VERSION = 6  # bump when HTML preparation, filters or post-processing change
 FAILED_STATUSES = frozenset({"failed", "no_text_layer"})
 SKIPPABLE_STATUSES = frozenset({"ok", "skipped_unchanged"})
+SUSPECT_EMPTY_CHARS = 500  # design: page that renders empty
+FLAG_SUSPECT_EMPTY = "suspect_empty"
 
 
 def utc_now() -> str:
@@ -107,6 +115,7 @@ class Pipeline:
         self.force = force
         self._pandoc: dict[str, PandocConverter] = {}
         self._docling: DoclingConverter | None = None
+        self._fetched: dict[str, FetchOutcome] = {}  # web source id -> fetch used
 
     # ----------------------------------------------------------- converters
 
@@ -142,6 +151,21 @@ class Pipeline:
         if r.from_format == "html" and doc.rel_path is not None:
             # A changed own URL changes which links are rewritten.
             options["self_url"] = self.cfg.self_url_for(doc.rel_path)
+        if doc.source is not None:
+            fetched = self._fetched[doc.id].record
+            options["source"] = {
+                "url": doc.source.url,
+                "render": doc.source.render,
+                "clean": doc.source.clean,
+                "drop_selectors": list(doc.source.drop_selectors),
+            }
+            # The final URL decides absolute links and self-links, the encoding how
+            # the bytes are read; the downloaded images go into media/.
+            options["fetch"] = {
+                "final_url": fetched.final_url,
+                "encoding": fetched.encoding,
+                "images": options_hash({"ok": fetched.images, "failed": fetched.images_failed}),
+            }
         if r.converter == "docling":
             options["pdf"] = {
                 "min_chars_per_page": self.cfg.pdf.min_chars_per_page,
@@ -191,15 +215,13 @@ class Pipeline:
                     "supported in v1; save as .docx"
                 ],
             )
-        if doc.source_type == "web":
-            return ManifestEntry(
-                **base,
-                status="failed",
-                error="web sources need fetching, which is built in phase 4",
-            )
-        assert doc.path is not None
         start = time.monotonic()
         try:
+            if doc.source is not None:
+                outcome = fetch_source(doc.source, self.cfg.fetch, self.work)
+                self._fetched[doc.id] = outcome
+                doc = dataclasses.replace(doc, path=outcome.html_path)
+            assert doc.path is not None
             source_sha = sha256_file(doc.path)
             version, options = self._options(doc, r)
             skipped = self._skip_if_unchanged(doc, source_sha, version, options)
@@ -208,7 +230,14 @@ class Pipeline:
             if r.converter == "docling":
                 return self._convert_pdf(doc, r, base, source_sha, version, options)
             return self._convert(doc, base, source_sha, options, self._run_pandoc(doc, r))
-        except (ConversionError, PostprocessError, FrontMatterError, PdfReadError, OSError) as exc:
+        except (
+            ConversionError,
+            PostprocessError,
+            FrontMatterError,
+            PdfReadError,
+            FetchError,
+            OSError,
+        ) as exc:
             return ManifestEntry(
                 **base,
                 status="failed",
@@ -268,12 +297,29 @@ class Pipeline:
             pandoc_input.parent.mkdir(parents=True, exist_ok=True)
             pandoc_input.write_bytes(prepared.html.encode("utf-8"))
         result = self.pandoc(r.from_format).convert(pandoc_input, tmp)
-        return Prepared(
-            result=result,
-            flags=list(prepared.flags) if prepared else [],
-            warnings=list(prepared.warnings) if prepared else [],
-            extra={"html": prepared.summary() if prepared else None},
-        )
+        flags = list(prepared.flags) if prepared else []
+        warnings = list(prepared.warnings) if prepared else []
+        extra: dict[str, Any] = {"html": prepared.summary() if prepared else None}
+        if doc.source is not None and prepared is not None:
+            record = self._fetched[doc.id].record
+            extra["fetch"] = dataclasses.asdict(record)
+            for failure in record.images_failed:
+                warnings.append(
+                    f"image {failure['url']}: not downloaded when the page was fetched "
+                    f"({failure['error']}); web link kept"
+                )
+            if prepared.text_chars < SUSPECT_EMPTY_CHARS:
+                flags.append(FLAG_SUSPECT_EMPTY)
+                hint = (
+                    "; if the page is built by JavaScript, set render: browser in sources.yaml"
+                    if doc.source.render == "static"
+                    else ""
+                )
+                warnings.append(
+                    f"only {prepared.text_chars} characters of text after cleanup "
+                    f"(under {SUSPECT_EMPTY_CHARS}){hint}"
+                )
+        return Prepared(result=result, flags=flags, warnings=warnings, extra=extra)
 
     def _convert_pdf(
         self,
@@ -351,10 +397,13 @@ class Pipeline:
         processed = postprocess(result.markdown, tmp)
         warnings += processed.warnings
 
+        fetched = self._fetched.get(doc.id) if doc.source is not None else None
         fm = FrontMatter(
             id=doc.id,
             source_type=doc.source_type,
             source_file=doc.rel_path or "",
+            source_url=doc.source.url if doc.source is not None else None,
+            fetched_at=fetched.record.fetched_at if fetched is not None else None,
             source_sha256=source_sha,
             converted_with=f"{result.tool} {result.tool_version}",
             converted_at=utc_now(),
@@ -386,13 +435,17 @@ class Pipeline:
         )
         _swap_into_place(tmp, final_dir)
 
+        tool_versions = {"specconv": __version__, result.tool: result.tool_version}
+        if fetched is not None:
+            fetcher = "playwright" if fetched.record.render == "browser" else "httpx"
+            tool_versions[fetcher] = dist_version(fetcher)
         return ManifestEntry(
             **base,
             status="ok",
             source_sha256=source_sha,
             converter=result.tool,
             converter_version=result.tool_version,
-            tool_versions={"specconv": __version__, result.tool: result.tool_version},
+            tool_versions=tool_versions,
             options=options,
             options_hash=options_hash(options),
             flags=list(prepared.flags),
@@ -404,7 +457,18 @@ class Pipeline:
         """Clean the HTML, rewrite self-links and copy local images into tmp/media."""
         assert doc.path is not None
         known: list[OwnUrl] = []
-        if doc.rel_path is not None:
+        web: dict[str, Any] = {}
+        if doc.source is not None:
+            record = self._fetched[doc.id].record
+            known = [OwnUrl(doc.source.url, "sources.yaml"), OwnUrl(record.final_url, "final URL")]
+            web = dict(
+                page_url=record.final_url,
+                encoding=record.encoding,
+                clean=doc.source.clean,
+                drop_selectors=doc.source.drop_selectors,
+                downloaded_images=record.downloaded_images(self.work),
+            )
+        elif doc.rel_path is not None:
             configured = self.cfg.self_url_for(doc.rel_path)
             if configured:
                 known.append(OwnUrl(configured, "self_urls"))
@@ -412,8 +476,10 @@ class Pipeline:
             doc.path.read_bytes(),
             strip_tags=self.cfg.html.strip_tags,
             media_dir=tmp / MEDIA_DIR,
-            html_path=doc.path,
+            # A fetched page has no local image folder: its images are web links.
+            html_path=doc.path if doc.source is None else None,
             known_urls=known,
+            **web,
         )
         log.debug(
             "%s: own URLs %s; %d self-links rewritten; removed %s; images %d copied, "

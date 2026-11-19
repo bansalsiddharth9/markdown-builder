@@ -1,0 +1,388 @@
+"""Download the web pages listed in sources.yaml (design: Web sources).
+
+- ``render: static`` uses httpx: redirects followed, ``fetch.timeout_s``,
+  ``fetch.retries`` retries on network errors, timeouts, HTTP 429 and 5xx.
+- ``render: browser`` loads the page in Playwright Chromium, waits for network
+  idle and saves ``page.content()`` (UTF-8). Same timeout and retries.
+
+Each page is saved to ``work/fetched/<id>.html`` with a sidecar
+``<id>.fetch.json`` (URL, final URL, HTTP status, fetch time, render mode,
+plus content type, encoding and SHA-256). A cached page is reused unless
+``refetch`` is set, or the cache no longer matches the source: its URL or
+render mode changed in sources.yaml, or the saved HTML was changed (SHA-256).
+
+Images (decision F16): every ``<img src>`` image of the page, from any
+site, is downloaded into ``work/fetched/<id>_files/`` and listed in the
+sidecar, so ``convert`` can copy it into ``media/`` without the network. An
+image that cannot be downloaded does not fail the fetch: it is listed under
+``images_failed`` and keeps its web link.
+
+Only HTTP 200 with an HTML content type counts as success. A failed fetch
+never replaces a good cached copy; the cache is written atomically, sidecar
+last, so a half-written fetch is never mistaken for a complete one.
+"""
+
+from __future__ import annotations
+
+import datetime as dt
+import hashlib
+import json
+import logging
+import mimetypes
+import os
+import shutil
+import time
+from dataclasses import asdict, dataclass
+from pathlib import Path
+from urllib.parse import unquote, urlsplit
+
+from specconv import __version__
+from specconv.config import FetchConfig, Source
+from specconv.htmlprep import page_image_urls, safe_name, unique_name
+
+log = logging.getLogger("specconv.fetch")
+
+FETCHED_DIR = "fetched"
+RETRY_BACKOFF_S = 1.0  # first wait between attempts; doubles each time
+RETRYABLE_STATUS = frozenset({408, 425, 429, 500, 502, 503, 504})
+HTML_TYPES = ("text/html", "application/xhtml+xml")
+MAX_IMAGE_BYTES = 50 * 1024 * 1024
+
+
+class FetchError(RuntimeError):
+    """A page could not be downloaded, or what came back is not an HTML page."""
+
+
+@dataclass(frozen=True)
+class FetchRecord:
+    """The sidecar <id>.fetch.json."""
+
+    id: str
+    url: str
+    final_url: str
+    status: int
+    fetched_at: str
+    render: str
+    content_type: str | None
+    encoding: str | None  # encoding of the saved bytes, when known (header or browser)
+    sha256: str
+    bytes: int
+    user_agent: str
+    specconv_version: str
+    duration_s: float
+    # Downloaded images: {url, file (name in <id>_files/), sha256, bytes, content_type}
+    images: list[dict]
+    images_failed: list[dict]  # {url, error}
+
+    def downloaded_images(self, work: Path) -> dict[str, Path]:
+        """image URL -> downloaded file, for prepare_html."""
+        folder = images_dir(work, self.id)
+        return {image["url"]: folder / image["file"] for image in self.images}
+
+
+@dataclass(frozen=True)
+class FetchOutcome:
+    record: FetchRecord
+    html_path: Path
+    from_cache: bool
+
+
+@dataclass(frozen=True)
+class _Page:
+    data: bytes
+    final_url: str
+    status: int
+    content_type: str | None
+    encoding: str | None
+
+
+def cache_paths(work: Path, source_id: str) -> tuple[Path, Path]:
+    folder = work / FETCHED_DIR
+    return folder / f"{source_id}.html", folder / f"{source_id}.fetch.json"
+
+
+def images_dir(work: Path, source_id: str) -> Path:
+    return work / FETCHED_DIR / f"{source_id}_files"
+
+
+def load_cached(work: Path, source: Source) -> FetchOutcome | None:
+    """The cached fetch for this source, or None if missing or stale."""
+    html_path, meta_path = cache_paths(work, source.id)
+    if not (html_path.is_file() and meta_path.is_file()):
+        return None
+    try:
+        record = FetchRecord(**json.loads(meta_path.read_text(encoding="utf-8")))
+    except (ValueError, TypeError) as exc:
+        log.warning(
+            "%s: unreadable fetch record %s (%s); fetching again", source.id, meta_path, exc
+        )
+        return None
+    if record.url != source.url or record.render != source.render:
+        log.info("%s: url or render mode changed since the cached fetch; fetching again", source.id)
+        return None
+    if hashlib.sha256(html_path.read_bytes()).hexdigest() != record.sha256:
+        log.warning("%s: cached page %s was changed; fetching again", source.id, html_path)
+        return None
+    folder = images_dir(work, source.id)
+    for image in record.images:
+        path = folder / image["file"]
+        if not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest() != image["sha256"]:
+            log.warning(
+                "%s: cached image %s is missing or changed; fetching again", source.id, path
+            )
+            return None
+    return FetchOutcome(record=record, html_path=html_path, from_cache=True)
+
+
+def fetch_source(
+    source: Source, cfg: FetchConfig, work: Path, refetch: bool = False
+) -> FetchOutcome:
+    """Return the cached page, or download it. Raises FetchError."""
+    if not refetch:
+        cached = load_cached(work, source)
+        if cached is not None:
+            return cached
+    start = time.monotonic()
+    fetcher = _fetch_browser if source.render == "browser" else _fetch_static
+    page = _with_retries(source.id, cfg, lambda: fetcher(source.url, cfg))
+    _check_page(page, source.url)
+    html_path, meta_path = cache_paths(work, source.id)
+    html_path.parent.mkdir(parents=True, exist_ok=True)
+    folder = images_dir(work, source.id)
+    tmp_images = folder.with_name(f".{folder.name}.tmp")
+    shutil.rmtree(tmp_images, ignore_errors=True)
+    images, failed = _download_images(source.id, page, cfg, tmp_images)
+    record = FetchRecord(
+        id=source.id,
+        url=source.url,
+        final_url=page.final_url,
+        status=page.status,
+        fetched_at=dt.datetime.now(dt.UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        render=source.render,
+        content_type=page.content_type,
+        encoding=page.encoding,
+        sha256=hashlib.sha256(page.data).hexdigest(),
+        bytes=len(page.data),
+        user_agent=cfg.user_agent,
+        specconv_version=__version__,
+        duration_s=round(time.monotonic() - start, 3),
+        images=images,
+        images_failed=failed,
+    )
+    meta_path.unlink(missing_ok=True)  # the old sidecar must not vouch for new files
+    _write_atomic(html_path, page.data)
+    shutil.rmtree(folder, ignore_errors=True)
+    if tmp_images.exists():
+        tmp_images.rename(folder)
+    _write_atomic(meta_path, (json.dumps(asdict(record), indent=2) + "\n").encode("utf-8"))
+    return FetchOutcome(record=record, html_path=html_path, from_cache=False)
+
+
+# ------------------------------------------------------------------ retries
+
+
+class _Retryable(FetchError):
+    """A failure worth another attempt (network error, timeout, 429, 5xx)."""
+
+
+def _with_retries(label: str, cfg: FetchConfig, attempt_once):
+    """Call attempt_once() up to fetch.retries + 1 times while it raises _Retryable."""
+    attempts = cfg.retries + 1
+    wait = RETRY_BACKOFF_S
+    for attempt in range(1, attempts + 1):
+        try:
+            return attempt_once()
+        except _Retryable as exc:
+            if attempt == attempts:
+                raise FetchError(f"{exc} (after {attempts} attempt(s))") from exc
+            log.warning("%s: attempt %d of %d failed: %s; retrying", label, attempt, attempts, exc)
+            time.sleep(wait)
+            wait *= 2
+    raise AssertionError("unreachable")
+
+
+def _check_page(page: _Page, url: str) -> None:
+    if page.status != 200:
+        raise FetchError(f"HTTP {page.status} for {url}")
+    if page.content_type is not None:
+        mime = page.content_type.split(";")[0].strip().lower()
+        if mime and mime not in HTML_TYPES:
+            raise FetchError(
+                f"{url} is not an HTML page (content type {mime}); "
+                "download the file into the input folder instead"
+            )
+
+
+def _status_error(status: int, url: str) -> FetchError:
+    if status in RETRYABLE_STATUS:
+        return _Retryable(f"HTTP {status} for {url}")
+    return FetchError(f"HTTP {status} for {url}")
+
+
+# ------------------------------------------------------------------- images
+
+
+def _download_images(
+    source_id: str, page: _Page, cfg: FetchConfig, folder: Path
+) -> tuple[list[dict], list[dict]]:
+    """Download the page's images into folder. Returns (downloaded, failed)."""
+    import httpx
+    from bs4 import BeautifulSoup
+
+    soup = BeautifulSoup(page.data, "html.parser", from_encoding=page.encoding)
+    urls = page_image_urls(soup, page.final_url)
+    if not urls:
+        return [], []
+    images: list[dict] = []
+    failed: list[dict] = []
+    taken: set[str] = set()
+    with httpx.Client(
+        follow_redirects=True, timeout=cfg.timeout_s, headers={"User-Agent": cfg.user_agent}
+    ) as client:
+        for url in urls:
+            try:
+                data, content_type = _with_retries(
+                    f"{source_id}: image {url}", cfg, lambda u=url: _get_image(client, u, cfg)
+                )
+            except FetchError as exc:
+                failed.append({"url": url, "error": str(exc)})
+                log.warning("%s: image not downloaded: %s", source_id, exc)
+                continue
+            name = unique_name(_image_file_name(url, content_type), taken)
+            taken.add(name)
+            folder.mkdir(parents=True, exist_ok=True)
+            (folder / name).write_bytes(data)
+            images.append(
+                {
+                    "url": url,
+                    "file": name,
+                    "sha256": hashlib.sha256(data).hexdigest(),
+                    "bytes": len(data),
+                    "content_type": content_type,
+                }
+            )
+    log.info(
+        "%s: %d of %d image(s) downloaded%s",
+        source_id,
+        len(images),
+        len(urls),
+        f", {len(failed)} failed" if failed else "",
+    )
+    return images, failed
+
+
+def _get_image(client, url: str, cfg: FetchConfig) -> tuple[bytes, str | None]:
+    import httpx
+
+    try:
+        with client.stream("GET", url) as response:
+            if response.status_code != 200:
+                raise _status_error(response.status_code, url)
+            content_type = response.headers.get("content-type")
+            mime = (content_type or "").split(";")[0].strip().lower()
+            if mime in HTML_TYPES:
+                raise FetchError(f"{url} returned an HTML page, not an image")
+            data = bytearray()
+            for chunk in response.iter_bytes():
+                data += chunk
+                if len(data) > MAX_IMAGE_BYTES:
+                    raise FetchError(f"{url} is larger than {MAX_IMAGE_BYTES // 2**20} MB")
+            return bytes(data), content_type
+    except httpx.TimeoutException as exc:
+        raise _Retryable(f"timed out after {cfg.timeout_s:g} s: {url}") from exc
+    except httpx.TransportError as exc:
+        raise _Retryable(f"network error for {url}: {type(exc).__name__}: {exc}") from exc
+    except httpx.HTTPError as exc:
+        raise FetchError(f"{url}: {type(exc).__name__}: {exc}") from exc
+
+
+def _image_file_name(url: str, content_type: str | None) -> str:
+    """File name from the URL's last path part; adds an extension from the content
+    type when the URL has none."""
+    name = safe_name(unquote(urlsplit(url).path.rsplit("/", 1)[-1]))
+    if "." not in name:
+        mime = (content_type or "").split(";")[0].strip().lower()
+        ext = {"image/svg+xml": ".svg", "image/jpeg": ".jpg"}.get(mime) or (
+            mimetypes.guess_extension(mime) if mime else None
+        )
+        name += ext or ""
+    return name
+
+
+# ------------------------------------------------------------------- static
+
+
+def _fetch_static(url: str, cfg: FetchConfig) -> _Page:
+    import httpx
+
+    try:
+        with httpx.Client(
+            follow_redirects=True,
+            timeout=cfg.timeout_s,
+            headers={"User-Agent": cfg.user_agent},
+        ) as client:
+            response = client.get(url)
+    except httpx.TimeoutException as exc:
+        raise _Retryable(f"timed out after {cfg.timeout_s:g} s: {url}") from exc
+    except httpx.TransportError as exc:
+        raise _Retryable(f"network error for {url}: {type(exc).__name__}: {exc}") from exc
+    except httpx.HTTPError as exc:
+        raise FetchError(f"{url}: {type(exc).__name__}: {exc}") from exc
+    if response.status_code != 200:
+        raise _status_error(response.status_code, url)
+    return _Page(
+        data=response.content,
+        final_url=str(response.url),
+        status=response.status_code,
+        content_type=response.headers.get("content-type"),
+        encoding=response.charset_encoding,  # only from the Content-Type header
+    )
+
+
+# ------------------------------------------------------------------ browser
+
+
+def _fetch_browser(url: str, cfg: FetchConfig) -> _Page:
+    from playwright.sync_api import Error as PlaywrightError
+    from playwright.sync_api import TimeoutError as PlaywrightTimeout
+    from playwright.sync_api import sync_playwright
+
+    if cfg.browsers_path is not None:
+        os.environ["PLAYWRIGHT_BROWSERS_PATH"] = str(cfg.browsers_path)
+    try:
+        with sync_playwright() as pw:
+            browser = pw.chromium.launch()
+            try:
+                context = browser.new_context(user_agent=cfg.user_agent)
+                page = context.new_page()
+                response = page.goto(url, wait_until="networkidle", timeout=cfg.timeout_s * 1000)
+                if response is None:
+                    raise FetchError(f"no response for {url}")
+                if response.status != 200:
+                    raise _status_error(response.status, url)
+                html = page.content()
+                return _Page(
+                    data=html.encode("utf-8"),
+                    final_url=page.url,
+                    status=response.status,
+                    content_type=response.headers.get("content-type"),
+                    encoding="utf-8",  # page.content() is text; saved as UTF-8
+                )
+            finally:
+                browser.close()
+    except FetchError:
+        raise
+    except PlaywrightTimeout as exc:
+        raise _Retryable(f"timed out after {cfg.timeout_s:g} s: {url}") from exc
+    except PlaywrightError as exc:
+        message = str(exc).splitlines()[0] if str(exc) else type(exc).__name__
+        raise _Retryable(f"browser error for {url}: {message}") from exc
+
+
+# -------------------------------------------------------------------- files
+
+
+def _write_atomic(path: Path, data: bytes) -> None:
+    tmp = path.with_name(f".{path.name}.tmp")
+    tmp.write_bytes(data)
+    os.replace(tmp, path)

@@ -1,6 +1,5 @@
-"""CLI behaviour in phase 1: argument and config errors exit 2, missing
-dependencies exit 2 with a hint, and the not-yet-built commands fail loudly
-(exit 1) instead of pretending to succeed."""
+"""CLI behaviour: argument and config errors exit 2, missing dependencies
+exit 2 with a hint, failures exit 1."""
 
 from __future__ import annotations
 
@@ -78,14 +77,19 @@ def test_missing_dependency_exits_2_and_lists_all(monkeypatch: pytest.MonkeyPatc
     assert "pandoc: not found" in result.output and "docling: not installed" in result.output
 
 
-def test_chromium_checked_only_for_browser_sources(write, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_chromium_checked_only_for_uncached_browser_sources(
+    write, monkeypatch: pytest.MonkeyPatch, site
+) -> None:
     calls: list[str] = []
     monkeypatch.setattr(deps, "check_chromium", lambda: calls.append("chromium") or [])
-    write("static.yaml", "sources:\n  - {id: a, url: https://a.org/}\n")
-    write("browser.yaml", "sources:\n  - {id: b, url: https://b.org/, render: browser}\n")
+    url = site.add("/p", "<p>x</p>")
+    write("static.yaml", f"sources:\n  - {{id: a, url: '{url}'}}\n")
+    write("browser.yaml", f"sources:\n  - {{id: b, url: '{url}', render: browser}}\n")
     invoke("fetch", "--sources", "static.yaml")
     assert calls == []
-    invoke("fetch", "--sources", "browser.yaml")
+    assert invoke("fetch", "--sources", "browser.yaml").exit_code == 0
+    assert calls == ["chromium"]
+    invoke("fetch", "--sources", "browser.yaml")  # cached: Chromium not needed
     assert calls == ["chromium"]
 
 
@@ -98,8 +102,8 @@ def test_convert_empty_input_writes_manifest_and_run_log(in_tmp: Path) -> None:
     assert "tool versions" in text and "pandoc" in text and "no documents" in text
 
 
-def test_fetch_stub_writes_log_in_work(write, in_tmp: Path) -> None:
-    write("s.yaml", "sources:\n  - {id: a, url: https://a.org/}\n")
+def test_fetch_failure_exits_1_and_writes_log_in_work(write, in_tmp: Path, site) -> None:
+    write("s.yaml", f"sources:\n  - {{id: a, url: '{site.url('/missing')}'}}\n")
     result = invoke("fetch", "--sources", "s.yaml", "--work", "w")
     assert result.exit_code == 1
     assert list((in_tmp / "w").glob("fetch-*.log"))

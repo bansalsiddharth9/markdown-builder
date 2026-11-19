@@ -159,3 +159,11 @@ def test_example_in_one_cell_table_becomes_code_block(tmp_path: Path) -> None:
     assert "```\n<tt>\n  <body/>\n</tt>\n```" in md
     assert "```\nplain   preformatted\n    text\n```" in md
     assert "<table" not in md and "<br />" not in md
+
+
+def test_content_outside_main_kept(tmp_path: Path) -> None:
+    """Pandoc's HTML reader alone keeps only <main> when there is one."""
+    src = tmp_path / "m.html"
+    src.write_text("<p>Before</p><main><p>Inside</p></main><p>After</p>", encoding="utf-8")
+    md = convert(src, "html", tmp_path / "out")
+    assert "Before" in md and "Inside" in md and "After" in md

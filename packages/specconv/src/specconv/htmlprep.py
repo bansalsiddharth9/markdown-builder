@@ -7,7 +7,16 @@ spec/deviations.md. Steps, in order:
 1. Find the document's own URL(s): the sources.yaml URL and its final URL
    (web sources), the browser's ``<!-- saved from url=(NNNN)… -->`` comment,
    ``<link rel="canonical">``, and the ``self_urls`` config map.
-2. Remove the configured strip_tags (script, style, noscript).
+2. Remove the configured strip_tags (script, style, noscript). For web
+   sources with ``clean: main-content``, also keep only ``<main>`` (or the
+   top-level ``<article>`` elements) when there is one, remove ``<nav>`` and
+   ``<aside>``, ``<header>`` and ``<footer>`` outside ``<main>``,
+   ``<article>`` and ``<section>``, and elements matching ``drop_selectors``.
+   For web sources, relative links and image URLs then become absolute,
+   using the final URL (and a ``<base href>``); links starting with ``#``
+   are never changed. Every remaining ``<main>`` becomes a ``<div>`` (same
+   attributes): when a page has a ``<main>``, Pandoc's HTML reader silently
+   drops everything outside it (checked with Pandoc 3.14).
 3. Rewrite links whose address without the fragment is the document's own
    URL into fragment-only links (``#intro``). ``…/`` and ``…/index.html``,
    and http and https, count as the same address. A link to the own URL
@@ -24,7 +33,9 @@ spec/deviations.md. Steps, in order:
    reader writes a bare <pre> as plain text with line breaks, not as code.
 6. Images: files on disk inside the HTML file's folder (e.g. a saved page's
    ``_files`` folder) are copied into ``media/`` and the link points there.
-   Web images stay web links: conversion never uses the network. Missing
+   For a fetched page, images that ``fetch`` downloaded (decision F16) are
+   copied the same way. Other web images stay web links: conversion never
+   uses the network. Missing
    images, and local paths outside the HTML file's folder, keep their
    original link and get a warning, so V7 still sees them.
 
@@ -37,10 +48,10 @@ from __future__ import annotations
 
 import re
 import shutil
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from urllib.parse import unquote, urljoin, urlsplit
+from urllib.parse import unquote, urldefrag, urljoin, urlsplit
 
 from bs4 import BeautifulSoup, Comment
 
@@ -65,11 +76,16 @@ class PreparedHtml:
     own_urls: list[OwnUrl] = field(default_factory=list)
     self_links_rewritten: int = 0
     images_copied: list[str] = field(default_factory=list)  # media paths, e.g. media/fig.png
-    images_remote: int = 0
+    images_remote: int = 0  # web images left as web links
+    images_downloaded: int = 0  # <img> links served from fetch's downloads (web sources)
     images_missing: list[str] = field(default_factory=list)  # original src values
     ids_moved_to_anchors: int = 0  # targeted ids on elements Pandoc would drop them from
     tables_unwrapped: int = 0  # one-cell tables replaced by their contents
     pre_given_code: int = 0  # bare <pre> elements given a <code> so they become code blocks
+    main_content: dict[str, object] | None = None  # clean: main-content only
+    links_made_absolute: int = 0  # web sources only
+    text_chars: int = 0  # non-whitespace characters of text after preparation
+    main_renamed: int = 0  # <main> elements turned into <div> so Pandoc keeps the rest
     warnings: list[str] = field(default_factory=list)
     flags: list[str] = field(default_factory=list)
 
@@ -81,11 +97,16 @@ class PreparedHtml:
             "ids_moved_to_anchors": self.ids_moved_to_anchors,
             "single_cell_tables_unwrapped": self.tables_unwrapped,
             "pre_given_code": self.pre_given_code,
+            "main_content": self.main_content,
+            "links_made_absolute": self.links_made_absolute,
+            "main_renamed_to_div": self.main_renamed,
+            "text_chars": self.text_chars,
             "removed_elements": self.removed,
             "source_encoding": self.original_encoding,
             "images": {
                 "copied": self.images_copied,
                 "remote": self.images_remote,
+                "from_fetch": self.images_downloaded,
                 "missing": self.images_missing,
             },
         }
@@ -178,6 +199,116 @@ def keep_targeted_ids(soup: BeautifulSoup) -> int:
     return moved
 
 
+# --------------------------------------------------- main-content cleanup
+
+PAGE_CHROME_ALWAYS = ("nav", "aside")
+PAGE_CHROME_OUTSIDE_CONTENT = ("header", "footer")  # kept inside CONTENT_TAGS
+CONTENT_TAGS = ["main", "article", "section"]
+
+
+def clean_main_content(soup: BeautifulSoup, drop_selectors: Iterable[str]) -> dict[str, object]:
+    """clean: main-content (design: HTML cleanup before conversion). Returns what was
+    kept and removed, for conversion.json."""
+    container = soup.body or soup
+    main = soup.find("main")
+    keep = (
+        [main]
+        if main is not None
+        else [a for a in soup.find_all("article") if a.find_parent("article") is None]
+    )
+    kept = "main" if main is not None else ("article" if keep else "body")
+    if keep:
+        for element in keep:
+            element.extract()
+        container.clear()
+        for element in keep:
+            container.append(element)
+    removed: dict[str, int] = {}
+
+    def drop(elements: list, label: str) -> None:
+        elements = [e for e in elements if not e.decomposed]
+        if elements:
+            removed[label] = removed.get(label, 0) + len(elements)
+        for element in elements:
+            if not element.decomposed:
+                element.decompose()
+
+    for tag in PAGE_CHROME_ALWAYS:
+        drop(soup.find_all(tag), tag)
+    for tag in PAGE_CHROME_OUTSIDE_CONTENT:
+        outside = [e for e in soup.find_all(tag) if e.find_parent(CONTENT_TAGS) is None]
+        drop(outside, tag)
+    for selector in drop_selectors:
+        drop(soup.select(selector), selector)
+    return {"kept": kept, "removed": removed}
+
+
+# --------------------------------------------------------- absolute links
+
+URL_ATTRIBUTES = {
+    "a": "href",
+    "area": "href",
+    "link": "href",
+    "img": "src",
+    "source": "src",
+    "track": "src",
+    "video": "src",
+    "audio": "src",
+    "iframe": "src",
+    "embed": "src",
+    "object": "data",
+}
+
+
+def base_url(soup: BeautifulSoup, page_url: str) -> str:
+    """The URL relative links resolve against: the page's <base href>, else its URL."""
+    base_tag = soup.find("base", href=True)
+    if base_tag is not None:
+        return urljoin(page_url, base_tag["href"].strip())
+    return page_url
+
+
+def image_key(url: str) -> str:
+    """How a downloaded image is looked up: the absolute URL without fragment."""
+    return urldefrag(url).url
+
+
+def page_image_urls(soup: BeautifulSoup, page_url: str) -> list[str]:
+    """Absolute http(s) URLs of the page's <img src> images, once each, in page order.
+    fetch downloads these; prepare_html resolves them the same way."""
+    base = base_url(soup, page_url)
+    urls: list[str] = []
+    for img in soup.find_all("img", src=True):
+        src = img["src"].strip()
+        if not src or src.startswith("data:"):
+            continue
+        url = image_key(urljoin(base, src))
+        if _is_web_url(url) and url not in urls:
+            urls.append(url)
+    return urls
+
+
+def absolutize_links(soup: BeautifulSoup, page_url: str) -> int:
+    """Make relative link and image URLs absolute against the page's final URL
+    (or its <base href>). Links starting with '#' and URLs with a scheme
+    (http, mailto, data, …) are left unchanged. Returns the number changed."""
+    base = base_url(soup, page_url)
+    changed = 0
+    for tag, attr in URL_ATTRIBUTES.items():
+        for element in soup.find_all(tag, attrs={attr: True}):
+            value = element[attr].strip()
+            if not value or value.startswith("#") or urlsplit(value).scheme:
+                continue
+            element[attr] = urljoin(base, value)
+            changed += 1
+    return changed
+
+
+def text_chars(soup: BeautifulSoup) -> int:
+    root = soup.body or soup
+    return sum(1 for ch in root.get_text() if not ch.isspace())
+
+
 # ------------------------------------------------------- one-cell tables
 
 
@@ -249,7 +380,7 @@ def _between(table, cell) -> list:
 # --------------------------------------------------------------- images
 
 
-def _unique_name(name: str, taken: set[str]) -> str:
+def unique_name(name: str, taken: set[str]) -> str:
     if name not in taken:
         return name
     stem, dot, ext = name.rpartition(".")
@@ -263,15 +394,22 @@ def _unique_name(name: str, taken: set[str]) -> str:
         n += 1
 
 
-def _safe_name(name: str) -> str:
+def safe_name(name: str) -> str:
     cleaned = re.sub(r"[^A-Za-z0-9._-]+", "-", name).strip("-.")
     return cleaned or "image"
 
 
 def handle_images(
-    soup: BeautifulSoup, html_dir: Path | None, media_dir: Path, result: PreparedHtml
+    soup: BeautifulSoup,
+    html_dir: Path | None,
+    media_dir: Path,
+    result: PreparedHtml,
+    downloaded: Mapping[str, Path] | None = None,
 ) -> None:
+    """Copy local images (and images fetch downloaded) into media_dir and point
+    the links there. `downloaded` maps image_key(absolute URL) -> file."""
     root = html_dir.resolve() if html_dir is not None else None
+    downloaded = downloaded or {}
     copied: dict[Path, str] = {}  # source file -> media name (one copy per file)
     taken: set[str] = set()
     for img in soup.find_all("img"):
@@ -280,29 +418,40 @@ def handle_images(
             continue
         parts = urlsplit(src)
         if parts.scheme in ("http", "https") or src.startswith("//"):
-            result.images_remote += 1
-            continue
-        if parts.scheme == "file":
-            path = Path(unquote(parts.path))
-        elif parts.scheme == "" and root is not None:
-            path = root / unquote(parts.path)
+            local = downloaded.get(image_key(src))
+            if local is None:
+                result.images_remote += 1
+                continue
+            resolved = local.resolve()
+            if not resolved.is_file():
+                result.images_remote += 1
+                result.warnings.append(f"image {src!r}: downloaded file {local} is gone; link kept")
+                continue
+            result.images_downloaded += 1
         else:
-            result.images_missing.append(src)
-            result.warnings.append(f"image {src!r}: cannot be resolved to a local file; link kept")
-            continue
-        resolved = path.resolve()
-        if root is None or not resolved.is_relative_to(root):
-            result.images_missing.append(src)
-            result.warnings.append(
-                f"image {src!r}: outside the HTML file's folder, not copied; link kept"
-            )
-            continue
-        if not resolved.is_file():
-            result.images_missing.append(src)
-            result.warnings.append(f"image {src!r}: file not found; link kept")
-            continue
+            if parts.scheme == "file":
+                path = Path(unquote(parts.path))
+            elif parts.scheme == "" and root is not None:
+                path = root / unquote(parts.path)
+            else:
+                result.images_missing.append(src)
+                result.warnings.append(
+                    f"image {src!r}: cannot be resolved to a local file; link kept"
+                )
+                continue
+            resolved = path.resolve()
+            if root is None or not resolved.is_relative_to(root):
+                result.images_missing.append(src)
+                result.warnings.append(
+                    f"image {src!r}: outside the HTML file's folder, not copied; link kept"
+                )
+                continue
+            if not resolved.is_file():
+                result.images_missing.append(src)
+                result.warnings.append(f"image {src!r}: file not found; link kept")
+                continue
         if resolved not in copied:
-            name = _unique_name(_safe_name(resolved.name), taken)
+            name = unique_name(safe_name(resolved.name), taken)
             taken.add(name)
             media_dir.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(resolved, media_dir / name)
@@ -321,9 +470,20 @@ def prepare_html(
     media_dir: Path,
     html_path: Path | None = None,
     known_urls: Iterable[OwnUrl] = (),
+    page_url: str | None = None,
+    encoding: str | None = None,
+    clean: str = "none",
+    drop_selectors: Iterable[str] = (),
+    downloaded_images: Mapping[str, Path] | None = None,
 ) -> PreparedHtml:
-    """Run steps 1 to 6 on raw HTML bytes. Images are copied into media_dir."""
-    soup = BeautifulSoup(data, "html.parser")
+    """Run steps 1 to 6 on raw HTML bytes. Images are copied into media_dir.
+
+    Web sources pass page_url (the final URL, for absolute links), encoding
+    (from the HTTP header, or UTF-8 for browser renders; overrides <meta>),
+    their clean mode and drop_selectors, and the images fetch downloaded
+    (image_key(URL) -> file).
+    """
+    soup = BeautifulSoup(data, "html.parser", from_encoding=encoding)
     result = PreparedHtml(html="", original_encoding=soup.original_encoding)
 
     result.own_urls = find_own_urls(soup, known_urls)
@@ -334,6 +494,13 @@ def prepare_html(
             result.removed[tag] = len(elements)
         for element in elements:
             element.decompose()
+    if clean == "main-content":
+        result.main_content = clean_main_content(soup, drop_selectors)
+    if page_url is not None:
+        result.links_made_absolute = absolutize_links(soup, page_url)
+    for main in soup.find_all("main"):
+        main.name = "div"
+        result.main_renamed += 1
 
     if result.own_urls:
         result.self_links_rewritten = rewrite_self_links(soup, result.own_urls)
@@ -347,6 +514,13 @@ def prepare_html(
     result.ids_moved_to_anchors = keep_targeted_ids(soup)
     result.tables_unwrapped = unwrap_single_cell_tables(soup)
     result.pre_given_code = code_in_pre(soup)
-    handle_images(soup, html_path.parent if html_path is not None else None, media_dir, result)
+    handle_images(
+        soup,
+        html_path.parent if html_path is not None else None,
+        media_dir,
+        result,
+        downloaded_images,
+    )
+    result.text_chars = text_chars(soup)
     result.html = str(soup)
     return result
