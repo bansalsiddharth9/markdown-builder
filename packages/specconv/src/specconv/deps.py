@@ -138,3 +138,20 @@ def tool_versions() -> dict[str, str]:
         except (OSError, subprocess.SubprocessError, RuntimeError):
             pass
     return versions
+
+
+def check_models(models_path: Path) -> list[DependencyProblem]:
+    """The pinned Docling models must be present (they are never downloaded on the fly)."""
+    from specconv.models import missing_models
+
+    missing = missing_models(models_path)
+    if missing:
+        names = ", ".join(m.repo_id for m in missing)
+        return [
+            DependencyProblem(
+                "docling models",
+                f"missing or at another revision in {models_path}: {names}",
+                "run 'uv run specconv download-models' (needs network once)",
+            )
+        ]
+    return []

@@ -25,6 +25,7 @@ class ConversionResult:
     media: list[Path] = field(default_factory=list)  # extracted images, relative to out_dir
     warnings: list[str] = field(default_factory=list)
     duration_s: float = 0.0
+    details: dict[str, Any] = field(default_factory=dict)  # tool-specific facts for conversion.json
 
 
 class Converter(Protocol):

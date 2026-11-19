@@ -105,7 +105,14 @@ def test_fetch_stub_writes_log_in_work(write, in_tmp: Path) -> None:
     assert list((in_tmp / "w").glob("fetch-*.log"))
 
 
-def test_check_deps_prints_versions() -> None:
-    result = invoke("check-deps")
+def test_check_deps_prints_versions(repo_root: Path) -> None:
+    result = invoke("check-deps", "--config", str(repo_root / "config/specconv.yaml"))
     assert result.exit_code == 0, result.output
     assert "pandoc 3." in result.output and "docling " in result.output
+    assert "model docling-project/docling-layout-heron 8f39ad3c0b4c" in result.output
+
+
+def test_missing_models_exit_2_with_hint(tmp_path: Path) -> None:
+    (tmp_path / "input" / "a.pdf").write_bytes(b"%PDF-1.4")
+    result = invoke("convert", "--input", "input")  # built-in default: ./models (absent)
+    assert result.exit_code == 2 and "specconv download-models" in result.output

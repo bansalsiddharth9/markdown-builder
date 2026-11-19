@@ -12,7 +12,7 @@ from typing import Annotated
 import typer
 from common.manifest import ManifestError
 
-from specconv import __version__, deps, routing
+from specconv import __version__, deps, models, routing
 from specconv import manifest as manifest_io
 from specconv.config import ConfigError, Source, SpecconvConfig, load_config, load_sources
 from specconv.pipeline import Pipeline
@@ -61,7 +61,11 @@ def _load(config: Path | None, sources: Path | None) -> tuple[SpecconvConfig, li
 
 
 def _check_dependencies(
-    cfg: SpecconvConfig, need_pandoc: bool, need_docling: bool, need_chromium: bool
+    cfg: SpecconvConfig,
+    need_pandoc: bool,
+    need_docling: bool,
+    need_chromium: bool,
+    need_models: bool = False,
 ) -> None:
     """Report every missing dependency, then exit 2 if there was any."""
     deps.configure_browsers_path(cfg.fetch.browsers_path)
@@ -72,6 +76,8 @@ def _check_dependencies(
         problems += deps.check_python_package("docling")
     if need_chromium:
         problems += deps.check_chromium()
+    if need_models:
+        problems += deps.check_models(cfg.pdf.models_path)
     if problems:
         typer.echo("error: missing system dependencies:", err=True)
         for problem in problems:
@@ -169,6 +175,7 @@ def convert(
         need_pandoc=True,
         need_docling=True,
         need_chromium=any(d.source is not None and d.source.render == "browser" for d in docs),
+        need_models=any(d.source_type == "pdf" for d in docs),
     )
 
     with run_logging(output / f"run-{run_timestamp()}.log", verbose) as log:
@@ -184,7 +191,8 @@ def convert(
         log.info("tool versions: %s", deps.tool_versions())
         for rel in scan.skipped:
             log.info("skipped (not a PDF, HTML or DOCX file): %s", rel)
-        result = Pipeline(cfg, output, work).run(docs, previous, full_run=only is None)
+        pipeline = Pipeline(cfg, output, work, previous=previous, force=force)
+        result = pipeline.run(docs, full_run=only is None)
         counts: dict[str, int] = {}
         for entry in result.processed:
             counts[entry.status] = counts.get(entry.status, 0) + 1
@@ -204,11 +212,36 @@ def convert(
 
 @app.command("check-deps")
 def check_deps(config: ConfigOpt = None) -> None:
-    """Check that Pandoc, Docling and Chromium are installed, and print their versions."""
+    """Check that Pandoc, Docling, its models and Chromium are installed; print versions."""
     cfg, _ = _load(config, None)
-    _check_dependencies(cfg, need_pandoc=True, need_docling=True, need_chromium=True)
+    _check_dependencies(
+        cfg, need_pandoc=True, need_docling=True, need_chromium=True, need_models=True
+    )
     for name, ver in deps.tool_versions().items():
         typer.echo(f"{name} {ver}")
+    for model in models.PINNED_MODELS:
+        typer.echo(f"model {model.repo_id} {model.revision[:12]}")
+
+
+@app.command("download-models")
+def download_models(
+    config: ConfigOpt = None,
+    force: Annotated[bool, typer.Option("--force", help="Download again even if present.")] = False,
+) -> None:
+    """Download the pinned Docling models into pdf.models_path (needs network, once)."""
+    cfg, _ = _load(config, None)
+    target = cfg.pdf.models_path
+    todo = models.PINNED_MODELS if force else models.missing_models(target)
+    if not todo:
+        typer.echo(f"all models present in {target}")
+        return
+    try:
+        done = models.download_models(target, force=force)
+    except Exception as exc:  # network or Hugging Face errors
+        typer.echo(f"error: download failed: {exc}", err=True)
+        raise typer.Exit(EXIT_FAILED) from exc
+    for model in done:
+        typer.echo(f"downloaded {model.repo_id} @ {model.revision[:12]} into {target}")
 
 
 def main() -> None:

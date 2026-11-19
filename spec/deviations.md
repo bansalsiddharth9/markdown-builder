@@ -18,7 +18,7 @@ Status: **open** = waiting for a decision; **accepted** = confirmed by the proje
 | E5 | — | Lock file resolved for Linux x86_64 only (`tool.uv.environments`) | Current PyTorch has no macOS Intel builds, which made the lock unsolvable; the tools only run on Linux (this host and the Docker image). | implemented |
 | E6 | Pin all versions | `typer` pinned to 0.27.3 instead of the newest | Docling 2.151.0 requires `typer <0.28`, and the workspace shares one lock file. | implemented |
 | E7 | — | `scripts/licenses.py` generates `LICENSES.md`; `tests/test_licenses.py` fails if the file is stale or any installed package has a license outside an allowed list | Enforces design principle 5 automatically whenever dependencies change. | implemented |
-| E8 | — | Docling requests its layout model (`docling-project/docling-layout-heron`) at revision `main`, which is not pinned | To do in phase 3: pin both Docling models to fixed revisions and store them inside the project, so conversions stay reproducible. | open |
+| E8 | — | Both Docling models pinned to commits (layout `8f39ad3c…`, TableFormer `fc0f2d45…` = tag v2.3.0) in `specconv/models.py`; downloaded once into `models/` (git-ignored, ~500 MB) with the new `specconv download-models`; new config key `pdf.models_path`; Docling runs with `HF_HUB_OFFLINE=1`. `convert` exits 2 with a hint when a PDF needs converting and the models are missing. | Docling otherwise downloads its layout model from the moving revision `main`; reproducible output needs fixed weights, and conversion should never use the network. | implemented |
 | E9 | — | `ruff` (MIT) added as a pinned dev tool; code formatted with it; lint rules fixed explicitly in `pyproject.toml` (`E, F, W, I, B, UP`, line length 100) | Consistent formatting across phases; an explicit rule set does not change when ruff's defaults do. | implemented |
 
 ## Converter (phase 2)
@@ -38,11 +38,67 @@ Status: **open** = waiting for a decision; **accepted** = confirmed by the proje
 | P11 | Statuses `ok, failed, no_text_layer, unsupported, skipped_unchanged`; exit 1 if a document failed | Exit 1 for `failed` and `no_text_layer`; `unsupported` (`.doc`) is a warning only. Manifest `source_type` gains `doc`. | A `.doc` file is a known, reported limitation rather than a conversion failure. | open |
 | P12 | Ignore other extensions and log them as skipped | Hidden files and folders (`.gitkeep`, `.DS_Store`) are ignored silently | They are never documents. | implemented |
 | P13 | Per-document timeout (15 minutes, described for the web worker) | Pandoc is run with a 900 s timeout in the CLI too | A hung converter must not block a run. | implemented |
-| P14 | — | Until their phases land, PDFs fail with "built in phase 3" and web sources with "built in phase 4" | Fail loudly rather than skip. | temporary |
+| P14 | — | Until their phases land, web sources fail with "built in phase 4" (PDFs: done in phase 3) | Fail loudly rather than skip. | temporary |
 
 ### Heading ids (P1): resolved
 
 The design chose option C (Lua filter writing `<a id>` anchors on the heading line). The comparison of options A to C that led to it is in the git history of this file.
+
+## Images, ids and self-links (decided after the design update, 2026-11-19)
+
+| # | Design says | Decision | Why | Status |
+| --- | --- | --- | --- | --- |
+| I1 | Images are copied into `media/`; fetched pages get absolute image URLs | **Conversion never uses the network.** Images on disk (including a `_files` folder) are copied into `media/`; images that exist only on the web stay as web links. Downloading web images, if wanted, belongs to the fetch step (phase 4) and its protected HTTP client. | Pandoc otherwise downloads every web image while converting (seen in a test): results would depend on the network, and in the web app an uploaded HTML file could make the server request any address, bypassing the URL protection. | accepted |
+| I2 | Report any image that cannot be found; V7 then fails | The image link is kept, still pointing at the missing file, and a warning is recorded | Pandoc replaces a missing image with its description text, which would hide the problem from V7. | accepted |
+| I3 | The Lua filter keeps every id that a link in the document targets | Heading and section ids are **always** kept, targeted or not; other element ids (definitions, figures, examples, table rows and cells) only when a link in the document targets them | Other documents link into a spec's sections (e.g. IMSC into TTML2), and those links are not in the document itself. | accepted |
+| S1 | Rewrite links to the document's own URL into `#fragment` links | A link to the document's own URL **without** a fragment is left unchanged | There is no fragment to keep; the link is harmless. | accepted |
+| S2 | Flag `self_url_unknown` when no own URL is found | Only set when the document has full-URL links with a fragment that could be self-links | Otherwise every hand-written local HTML file would carry a meaningless flag. | accepted |
+
+## Converter (phase 3)
+
+| # | Design says | Implementation | Why | Status |
+| --- | --- | --- | --- | --- |
+| Q1 | Lua filter keeps ids of headings and of the `<section>` containing them, on the heading line | Done. A plain `<section>` wrapper (only class `section`) is then removed; wrappers with other classes (e.g. `informative`, `note`) are kept without their id. | Pandoc's GFM writer otherwise writes every section as a `<div id class="section">` wrapper; once the id is on the heading the plain wrapper carries nothing. Other classes can carry meaning. | implemented |
+| Q2 | — | DOCX: only heading ids that a link in the document targets are kept (`-M anchor-headings=targeted`); HTML keeps all (I3) | Pandoc's DOCX reader invents heading ids even with `-auto_identifiers`; those are not source ids and nothing links to them. | implemented |
+| Q3 | — | Table ids are always removed from the table itself (anchor before it if targeted); a code block keeps its id attribute | Pandoc writes a pipe table's id literally in its caption (`Codes {#tbl-codes}`); removing a code block's last attribute makes Pandoc switch from a fenced to an indented block. | implemented |
+| Q4 | Pandoc with `--extract-media` | HTML: Pandoc runs with `--sandbox` and no `--extract-media`; `specconv` copies local images itself before conversion. DOCX: `--sandbox` with `--extract-media` (images inside the file). | Implements I1/I2: Pandoc would download web images and replace missing ones with their description. | implemented |
+| Q5 | Images in the `_files` folder are copied into `media/` | Only images inside the HTML file's own folder (and its subfolders) are copied; other local paths (`../x.png`, `file:///etc/…`) keep their link and get a warning. Names are made safe (`fig 1.png` → `fig-1.png`), clashes get a suffix, a file used twice is copied once. | Security for the web app: an uploaded page must not pull arbitrary server files into a downloadable `media/` folder. | implemented |
+| Q6 | Keep the `_files` folder next to the HTML file in `input/` | Files inside `<name>_files/` next to `<name>.html`/`.htm` are not scanned as inputs | Browsers also save frames and scripts as `.html`/`.js` there; they are parts of the page, not documents. | implemented |
+| Q7 | Docling markdown export | Tables with merged cells use Docling's HTML export **including** its `<caption>`; the caption is not repeated as a paragraph. Pictures are rendered at `images_scale=2.0` (144 dpi). | Docling's HTML export adds the caption even with `add_caption=False`; Pandoc's HTML tables also carry the caption inside, so PDF and HTML outputs match. Docling's default 72 dpi is too coarse for spec diagrams. | implemented |
+| Q8 | — | Text Docling classifies as page header/footer ("furniture") is listed in `conversion.json` (`docling.dropped_as_page_furniture`), with a warning | Docling drops it from the Markdown by design, and a real code line at the bottom of a page can be misclassified (seen in the fixture: the `WEBVTT` line). Content is unchanged; the list lets a reviewer (and later V3/V6) see what was dropped. | implemented |
+| Q9 | Incremental: skip when source SHA-256 and converter version match | Also requires the same options hash (now including the HTML file's configured `self_url` and a `recipe_version` that is bumped when preparation, filters or post-processing change), the same source path, an existing output file, and a previous status of `ok`/`skipped_unchanged` (failed documents are retried). A skipped entry keeps the previous entry's details. | A changed option or recipe must produce new output; found by a test (changing `self_urls` was not picked up). | implemented |
+| Q10 | `no_text_layer`: not converted | No output folder is written; an existing output folder from an earlier conversion is left in place. Damaged or password-protected PDFs fail with a clear error. | Never delete converted files automatically. | implemented |
+| Q11 | Fixtures: HTML printed to PDF with `page.pdf()` | The fixture HTML now has table borders, a real-size image and W3C-style shaded code blocks; mixed-text-layer PDFs are built by merging pages | Without borders Docling found no tables; without a visible size it found no picture; real specs look like this. | implemented |
+| Q12 | — | When a link targets an id on `<nav>`, `<article>`, `<footer>` or `<details>`, HTML preparation moves the id to an empty `<a id>` at the start of the element | Pandoc's HTML reader drops ids on these four elements (checked with Pandoc 3.14); TTML2's `#toc` link pointed nowhere. Content unchanged. | implemented |
+| Q13 | — | Docling's own log warnings (e.g. "5 of 152 pdf cells … were dropped from the table") are collected into the document's warnings in the manifest and `conversion.json` | Design principle 3 (fail loudly): on CEA-608-E they were only printed to the console. | implemented |
+| Q14 | — | HTML preparation replaces every table with exactly one cell by its caption (as a paragraph) followed by the cell's contents. Ids on the table, its rows or the cell move to empty `<a id>` anchors. | W3C specs draw a box around each example with a one-cell table; inside a table cell an example cannot be a code block. Decided by the user (option B, 2026-11-19). The validator must apply the same rule when counting tables (V1). | implemented |
+| Q15 | — | A `<pre>` without a `<code>` inside gets one before conversion | Pandoc 3.14's HTML reader writes a bare `<pre>` as plain text with `<br />` line breaks, not as a code block, wherever it is. TTML2 (272) and SAMI (16) use bare `<pre>`. | implemented |
+| Q16 | — | The anchors filter writes code blocks that have no language, class or id as fenced blocks itself (the fence is longer than any backtick run in the code) | Pandoc's GFM writer writes such blocks as indented code. DOCX "Source Code" paragraphs are now fenced too. | implemented |
+
+
+### Code examples inside table cells (TTML2): resolved (Q14, Q15, Q16)
+
+W3C specs such as TTML2 wrap every example in a one-cell table: `<table class="example"><caption>…</caption><tr><td><pre>…</pre></td></tr></table>`. Before the fix the examples came out as escaped text joined with `<br />` inside an HTML table. Two causes: inside a table cell an example cannot be a Markdown code block, and Pandoc 3.14 reads a bare `<pre>` (no `<code>`) as plain text even outside tables. The user chose option B (unwrap one-cell tables); Q15 and Q16 were needed to make the examples real fenced code blocks.
+
+On TTML2 this unwraps 329 tables: 120 examples and 138 syntax boxes (all with a `<pre>`), 63 image boxes, 7 formula boxes and 1 text box. The 9 tables with more than one cell are unchanged.
+
+## Real specs (phase 3 run on `input/`)
+
+| Spec | Result |
+| --- | --- |
+| TTML2 (saved page, 1.9 MB) | Pandoc. All 6,786 self-links rewritten (the number the design predicted); all 6,764 in-page links resolve; 83 images copied from the `_files` folder; all 272 examples are fenced code blocks (Q14 to Q16). |
+| SAMI 1.0 (`.htm`) | Pandoc. Own URL from the canonical link; all 29 in-page links resolve; 9 images exist only on the web and stay web links (I1); its 16 examples are fenced code blocks (Q15). |
+| CEA-608-E (143-page PDF) | Docling, 4 minutes on this host's CPU, peak memory 5.6 GB (relevant for worker sizing in the web app). 78 tables, 12 with merged cells written as HTML; 416 page headers/footers left out (licence watermark, running title, page numbers); Docling reports 7 table cells it dropped in two tables (now in the warnings); one footnote row was split across cells. |
+
+### Known Docling limitations (seen on the fixture; the validator must expect them)
+
+These are not fixed in the converter (design principle 1: never "fix" content). They are recorded here because V3, V4 and V6 must handle them:
+
+- **Line breaks inside code are lost**: a multi-line XML example comes out as one line (text complete, order kept). A strict `xfail` test records this; it will start failing if a future Docling keeps line breaks.
+- **Code at a page break can be dropped** as a page footer (see Q8), and a neighbouring paragraph can be pulled into a code block depending on layout.
+- **Characters are normalized by Docling's PDF parser**: the en dash `–` becomes `-` (pypdf and pdfplumber read `–` from the same file).
+- **Heading levels are flattened**: every heading comes out as `##`.
+- **HTML special characters in text are escaped** (`-->` becomes `--&gt;`): correct Markdown, but V3/V4 must decode entities before comparing.
 
 ## Command line
 
@@ -54,6 +110,7 @@ The design chose option C (Lua filter writing `<a id>` anchors on the heading li
 | C4 | `specval approve ID --output [--override]` | Added `--by NAME` | The web UI records who approved; the CLI should be able to as well. | implemented |
 | C5 | `convert --input input/ --sources sources.yaml` | Both are optional, but at least one is required | Allows converting only files or only web pages. | implemented |
 | C6 | A log file per run | `convert` → `output/run-<timestamp>.log`; `fetch` → `work/fetch-<timestamp>.log`; `specval run` → `validation/run-<timestamp>.log` | The design only names the `convert` log location. | implemented |
+| C8 | — | New command `specconv download-models [--force]` | Fetches the pinned Docling models (E8); needed once per machine and in the Docker image. | implemented |
 | C7 | — | Commands not built yet exit with code 1 and say "not implemented yet (phase N)" | Design principle 3: fail loudly, never pretend to succeed. Removed as each phase lands (`convert`: phase 2; `--split` exits 2 until phase 7). | implemented |
 
 ## Data formats
@@ -76,6 +133,7 @@ The design chose option C (Lua filter writing `<a id>` anchors on the heading li
 | V-d | PDF running headers, footers and page numbers inflate V3/V4 source counts | Remove lines that repeat on more than half the pages before comparing | open |
 | V-e | V2 for PDFs (no source headings) | Check only that Markdown numbering is in sequence | open |
 | V-f | DOCX code blocks: which styles count as code | Style name containing "code" or "source", or a monospace font (Courier, Consolas, Menlo, Source Code), configurable | open |
+| V-g | V1/V6 for HTML after Q14/Q15: one-cell tables no longer exist in the output, and a bare `<pre>` is code | V1 skips source tables with exactly one cell; V6 counts every `<pre>` as a code block | open |
 
 ## Web application still open (affect phases 9 to 11)
 

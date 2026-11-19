@@ -78,20 +78,12 @@ SYSTEM_TOOLS = [
     ("Python", "3.12", "PSF-2.0", "runtime"),
 ]
 
+from specconv.models import PINNED_MODELS  # noqa: E402  (single source of the pins)
+
 MODEL_WEIGHTS = [
     # repository, revision, license, use
-    (
-        "docling-project/docling-layout-heron",
-        "main (see note)",
-        "Apache-2.0",
-        "Docling layout model (default)",
-    ),
-    (
-        "docling-project/docling-models",
-        "v2.3.0",
-        "CDLA-Permissive-2.0, Apache-2.0",
-        "TableFormer table structure model (accurate mode)",
-    ),
+    (m.repo_id, f"`{m.revision}`", m.license, m.use)
+    for m in PINNED_MODELS
 ]
 
 
@@ -158,15 +150,16 @@ def render(packages: list[tuple[str, str, str]]) -> str:
         "",
         "## Model weights",
         "",
-        "Downloaded from Hugging Face by Docling on first use. With the settings in the "
-        "design (no OCR, accurate table mode, no enrichments) only these two are used.",
+        "With the settings in the design (no OCR, accurate table mode, no enrichments) "
+        "Docling uses only these two models.",
         "",
         "| Repository | Revision | License | Use |",
         "| --- | --- | --- | --- |",
         *[f"| `{r}` | {rev} | {lic} | {use} |" for r, rev, lic, use in MODEL_WEIGHTS],
         "",
-        "Note: Docling requests the layout model at revision `main`, which is not pinned. "
-        "Phase 3 pins both models to fixed revisions so conversions stay reproducible.",
+        "Both are pinned to the commits above (`specconv/models.py`), downloaded once with "
+        "`specconv download-models` into `models/`, and loaded from there with Hugging Face "
+        "downloads switched off.",
         "",
         "Docling also installs RapidOCR (Apache-2.0) as a dependency; OCR is disabled, so "
         "its models are never downloaded.",

@@ -29,6 +29,9 @@ class ConfigError(ValueError):
 class PdfConfig:
     min_chars_per_page: int = 50
     min_text_page_ratio: float = 0.7
+    # Pinned Docling models (specconv download-models). Relative paths are
+    # resolved against the config file's folder; built-in default: ./models.
+    models_path: Path = Path("models")
 
 
 @dataclass(frozen=True)
@@ -51,6 +54,13 @@ class SpecconvConfig:
     pdf: PdfConfig = field(default_factory=PdfConfig)
     html: HtmlConfig = field(default_factory=HtmlConfig)
     fetch: FetchConfig = field(default_factory=FetchConfig)
+    # Local HTML file (path relative to the input folder, or file name) -> the
+    # document's own URL, used to rewrite full-URL links to its own sections.
+    self_urls: dict[str, str] = field(default_factory=dict)
+
+    def self_url_for(self, rel_path: str) -> str | None:
+        """The configured own URL for a local file, by relative path, then file name."""
+        return self.self_urls.get(rel_path) or self.self_urls.get(Path(rel_path).name)
 
 
 @dataclass(frozen=True)
@@ -135,11 +145,13 @@ def load_config(path: Path | None = None) -> SpecconvConfig:
             return SpecconvConfig()
         path = DEFAULT_CONFIG_PATH
     data = _mapping(_read_yaml(path), str(path))
-    _reject_unknown(data, {"pdf", "html", "fetch"}, str(path))
+    _reject_unknown(data, {"pdf", "html", "fetch", "self_urls"}, str(path))
     base = path.resolve().parent
 
     pdf_d = _mapping(data.get("pdf"), f"{path}: pdf")
-    _reject_unknown(pdf_d, {"min_chars_per_page", "min_text_page_ratio"}, f"{path}: pdf")
+    _reject_unknown(
+        pdf_d, {"min_chars_per_page", "min_text_page_ratio", "models_path"}, f"{path}: pdf"
+    )
     pdf = PdfConfig(
         min_chars_per_page=_int(
             pdf_d.get("min_chars_per_page", PdfConfig.min_chars_per_page),
@@ -152,6 +164,9 @@ def load_config(path: Path | None = None) -> SpecconvConfig:
             lo=0.0,
             hi=1.0,
         ),
+        models_path=(base / _str(pdf_d["models_path"], f"{path}: pdf.models_path")).resolve()
+        if "models_path" in pdf_d
+        else PdfConfig.models_path,
     )
 
     html_d = _mapping(data.get("html"), f"{path}: html")
@@ -181,7 +196,14 @@ def load_config(path: Path | None = None) -> SpecconvConfig:
         ),
         browsers_path=browsers_path.resolve() if browsers_path else None,
     )
-    return SpecconvConfig(pdf=pdf, html=html, fetch=fetch)
+    self_urls: dict[str, str] = {}
+    for name, url in _mapping(data.get("self_urls"), f"{path}: self_urls").items():
+        where = f"{path}: self_urls.{name}"
+        url = _str(url, where)
+        if not url.startswith(("http://", "https://")):
+            raise ConfigError(f"{where}: must start with http:// or https://, got {url!r}")
+        self_urls[_str(name, where)] = url
+    return SpecconvConfig(pdf=pdf, html=html, fetch=fetch, self_urls=self_urls)
 
 
 # ------------------------------------------------------------ sources.yaml

@@ -18,14 +18,14 @@ Pandoc is GPL: it is only executed as a separate program and not distributed wit
 
 ## Model weights
 
-Downloaded from Hugging Face by Docling on first use. With the settings in the design (no OCR, accurate table mode, no enrichments) only these two are used.
+With the settings in the design (no OCR, accurate table mode, no enrichments) Docling uses only these two models.
 
 | Repository | Revision | License | Use |
 | --- | --- | --- | --- |
-| `docling-project/docling-layout-heron` | main (see note) | Apache-2.0 | Docling layout model (default) |
-| `docling-project/docling-models` | v2.3.0 | CDLA-Permissive-2.0, Apache-2.0 | TableFormer table structure model (accurate mode) |
+| `docling-project/docling-layout-heron` | `8f39ad3c0b4c58e9c2d2c84a38465abf757272d8` | Apache-2.0 | Docling layout model (default) |
+| `docling-project/docling-models` | `fc0f2d45e2218ea24bce5045f58a389aed16dc23` | CDLA-Permissive-2.0, Apache-2.0 | TableFormer table structure model (accurate mode) |
 
-Note: Docling requests the layout model at revision `main`, which is not pinned. Phase 3 pins both models to fixed revisions so conversions stay reproducible.
+Both are pinned to the commits above (`specconv/models.py`), downloaded once with `specconv download-models` into `models/`, and loaded from there with Hugging Face downloads switched off.
 
 Docling also installs RapidOCR (Apache-2.0) as a dependency; OCR is disabled, so its models are never downloaded.
 

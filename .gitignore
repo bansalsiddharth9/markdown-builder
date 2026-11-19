@@ -9,3 +9,4 @@ validation/
 data/
 input/*
 !input/.gitkeep
+models/

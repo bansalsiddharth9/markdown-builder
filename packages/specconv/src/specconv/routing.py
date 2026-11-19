@@ -53,6 +53,18 @@ def _unique(slug: str, taken: set[str]) -> str:
     return f"{slug}-{n}"
 
 
+def _in_saved_page_folder(path: Path, input_dir: Path) -> bool:
+    """True for files inside 'X_files/' next to 'X.html' or 'X.htm', the folder a
+    browser's "Save page as, complete" writes the page's images into."""
+    for parent in path.relative_to(input_dir).parents:
+        folder = input_dir / parent
+        if folder.name.endswith("_files"):
+            stem = folder.name[: -len("_files")]
+            if any((folder.parent / f"{stem}{ext}").is_file() for ext in (".html", ".htm")):
+                return True
+    return False
+
+
 def scan(
     input_dir: Path | None,
     sources: list[Source],
@@ -85,6 +97,8 @@ def scan(
             rel = path.relative_to(input_dir).as_posix()
             if any(part.startswith(".") for part in path.relative_to(input_dir).parts):
                 continue  # hidden files and folders, e.g. .gitkeep, .DS_Store
+            if _in_saved_page_folder(path, input_dir):
+                continue  # images etc. of a browser-saved page, used by that page
             ext = path.suffix.lower()
             if ext in CONVERTIBLE:
                 found.append((path, rel, CONVERTIBLE[ext]))

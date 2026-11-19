@@ -2,6 +2,7 @@
 pdf:
   min_chars_per_page: 50      # a page "has a text layer" at this many non-whitespace chars
   min_text_page_ratio: 0.7    # below this share of text pages: no_text_layer, not converted
+  models_path: ../models      # pinned Docling models (specconv download-models), relative to this file
 html:
   strip_tags: [script, style, noscript]
 fetch:
@@ -9,3 +10,8 @@ fetch:
   retries: 3
   user_agent: "specconv/1.0"
   browsers_path: ../.playwright   # Playwright Chromium, relative to this file
+# Own URL of local HTML files whose page has no "saved from" comment or
+# canonical link (path relative to input/, or file name). Used to rewrite
+# full-URL links to the document's own sections into "#…" links.
+self_urls: {}
+#  ttml2.html: https://www.w3.org/TR/2018/REC-ttml2-20181108/

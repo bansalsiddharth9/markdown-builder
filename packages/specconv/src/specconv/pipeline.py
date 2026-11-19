@@ -11,10 +11,16 @@ Each document is built in a temporary folder and swapped into place only
 after it succeeded, so a failed re-conversion leaves the previous output
 untouched. One failing document never stops the others (fail loudly, per
 document, in the manifest and the log).
+
+Incremental runs (design: Incremental runs): a document is skipped and
+marked skipped_unchanged when its source SHA-256, converter version and
+options hash match the previous manifest entry and its output exists.
+--force converts everything again.
 """
 
 from __future__ import annotations
 
+import dataclasses
 import datetime as dt
 import hashlib
 import json
@@ -22,6 +28,7 @@ import logging
 import shutil
 import time
 from dataclasses import dataclass, field
+from importlib.metadata import version as dist_version
 from pathlib import Path
 from typing import Any
 
@@ -31,17 +38,20 @@ from common.manifest import Manifest, ManifestEntry
 from specconv import __version__
 from specconv import manifest as manifest_io
 from specconv.config import SpecconvConfig
-from specconv.converters.base import ConversionError
+from specconv.converters.base import MEDIA_DIR, ConversionError, ConversionResult
+from specconv.converters.docling import DoclingConverter
 from specconv.converters.pandoc import PandocConverter
 from specconv.frontmatter import carry_over, read_previous
-from specconv.htmlclean import clean_html
+from specconv.htmlprep import OwnUrl, PreparedHtml, prepare_html
 from specconv.postprocess import PostprocessError, postprocess
 from specconv.routing import InputDoc, Route, route
+from specconv.textlayer import FLAG_MIXED, PdfReadError, TextLayer, check_text_layer
 
 log = logging.getLogger("specconv.pipeline")
 
-POSTPROCESS_VERSION = 1  # bump when post-processing changes, so outputs are redone
+RECIPE_VERSION = 4  # bump when HTML preparation, filters or post-processing change
 FAILED_STATUSES = frozenset({"failed", "no_text_layer"})
+SKIPPABLE_STATUSES = frozenset({"ok", "skipped_unchanged"})
 
 
 def utc_now() -> str:
@@ -71,12 +81,32 @@ class RunResult:
         return [e for e in self.processed if e.status in FAILED_STATUSES]
 
 
+@dataclass
+class Prepared:
+    """What a route produced before the shared finishing steps."""
+
+    result: ConversionResult
+    flags: list[str] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
+    extra: dict[str, Any] = field(default_factory=dict)  # extra conversion.json sections
+
+
 class Pipeline:
-    def __init__(self, cfg: SpecconvConfig, output: Path, work: Path) -> None:
+    def __init__(
+        self,
+        cfg: SpecconvConfig,
+        output: Path,
+        work: Path,
+        previous: Manifest | None = None,
+        force: bool = False,
+    ) -> None:
         self.cfg = cfg
         self.output = output
         self.work = work
+        self.previous = previous or Manifest()
+        self.force = force
         self._pandoc: dict[str, PandocConverter] = {}
+        self._docling: DoclingConverter | None = None
 
     # ----------------------------------------------------------- converters
 
@@ -85,12 +115,46 @@ class Pipeline:
             self._pandoc[from_format] = PandocConverter(from_format)
         return self._pandoc[from_format]
 
+    def docling(self) -> DoclingConverter:
+        """Created on first use and reused for the whole run (model loading is slow)."""
+        if self._docling is None:
+            self._docling = DoclingConverter(self.cfg.pdf.models_path)
+        return self._docling
+
+    def _options(self, doc: InputDoc, r: Route) -> tuple[str, dict[str, Any]]:
+        """Converter version and the options recorded in the manifest, known
+        before converting so unchanged documents can be skipped."""
+        if r.converter == "pandoc":
+            assert r.from_format is not None
+            conv = self.pandoc(r.from_format)
+            version, converter_options = conv.version(), conv.options()
+            strip_tags = list(self.cfg.html.strip_tags) if r.from_format == "html" else None
+        else:
+            version = dist_version("docling")
+            converter_options = DoclingConverter.options()
+            strip_tags = None
+        options = {
+            "route": r.name,
+            "converter": converter_options,
+            "strip_tags": strip_tags,
+            "recipe_version": RECIPE_VERSION,
+        }
+        if r.from_format == "html" and doc.rel_path is not None:
+            # A changed own URL changes which links are rewritten.
+            options["self_url"] = self.cfg.self_url_for(doc.rel_path)
+        if r.converter == "docling":
+            options["pdf"] = {
+                "min_chars_per_page": self.cfg.pdf.min_chars_per_page,
+                "min_text_page_ratio": self.cfg.pdf.min_text_page_ratio,
+            }
+        return version, options
+
     # ------------------------------------------------------------------ run
 
-    def run(self, docs: list[InputDoc], previous: Manifest, full_run: bool) -> RunResult:
+    def run(self, docs: list[InputDoc], full_run: bool) -> RunResult:
         """Convert docs. On a full run the manifest lists exactly these docs;
         otherwise (--only) entries of other documents are kept."""
-        result = RunResult(manifest=Manifest() if full_run else previous)
+        result = RunResult(manifest=Manifest() if full_run else self.previous)
         for doc in docs:
             entry = self.convert_one(doc)
             result.processed.append(entry)
@@ -99,10 +163,11 @@ class Pipeline:
             log.log(
                 level, "%s: %s%s", doc.id, entry.status, f" ({entry.error})" if entry.error else ""
             )
-            for warning in entry.warnings:
-                log.warning("%s: %s", doc.id, warning)
+            if entry.status != "skipped_unchanged":
+                for warning in entry.warnings:
+                    log.warning("%s: %s", doc.id, warning)
         if full_run:
-            for old in previous.entries:
+            for old in self.previous.entries:
                 if result.manifest.get(old.id) is None and (self.output / old.id).exists():
                     log.warning(
                         "%s: input no longer present; its output folder %s was kept",
@@ -114,7 +179,9 @@ class Pipeline:
 
     def convert_one(self, doc: InputDoc) -> ManifestEntry:
         r = route(doc)
-        base = dict(id=doc.id, source=doc.display_source, source_type=doc.source_type, route=r.name)
+        base: dict[str, Any] = dict(
+            id=doc.id, source=doc.display_source, source_type=doc.source_type, route=r.name
+        )
         if r.converter is None:
             return ManifestEntry(
                 **base,
@@ -130,15 +197,18 @@ class Pipeline:
                 status="failed",
                 error="web sources need fetching, which is built in phase 4",
             )
-        if r.converter == "docling":
-            return ManifestEntry(
-                **base, status="failed", error="PDF conversion is built in phase 3"
-            )
         assert doc.path is not None
         start = time.monotonic()
         try:
-            return self._convert_with_pandoc(doc, r, base)
-        except (ConversionError, PostprocessError, FrontMatterError, OSError) as exc:
+            source_sha = sha256_file(doc.path)
+            version, options = self._options(doc, r)
+            skipped = self._skip_if_unchanged(doc, source_sha, version, options)
+            if skipped is not None:
+                return skipped
+            if r.converter == "docling":
+                return self._convert_pdf(doc, r, base, source_sha, version, options)
+            return self._convert(doc, base, source_sha, options, self._run_pandoc(doc, r))
+        except (ConversionError, PostprocessError, FrontMatterError, PdfReadError, OSError) as exc:
             return ManifestEntry(
                 **base,
                 status="failed",
@@ -156,40 +226,128 @@ class Pipeline:
         finally:
             shutil.rmtree(self._tmp_dir(doc.id), ignore_errors=True)
 
-    # ------------------------------------------------------------ internals
+    # --------------------------------------------------------- incremental
+
+    def _skip_if_unchanged(
+        self, doc: InputDoc, source_sha: str, version: str, options: dict[str, Any]
+    ) -> ManifestEntry | None:
+        if self.force:
+            return None
+        prev = self.previous.get(doc.id)
+        if (
+            prev is None
+            or prev.status not in SKIPPABLE_STATUSES
+            or prev.source != doc.display_source
+            or prev.source_sha256 != source_sha
+            or prev.converter_version != version
+            or prev.options_hash != options_hash(options)
+            or not (self.output / doc.id / f"{doc.id}.md").is_file()
+        ):
+            return None
+        return dataclasses.replace(prev, status="skipped_unchanged", duration_s=0.0)
+
+    # -------------------------------------------------------------- routes
 
     def _tmp_dir(self, doc_id: str) -> Path:
         return self.output / f".{doc_id}.tmp"
 
-    def _convert_with_pandoc(self, doc: InputDoc, r: Route, base: dict[str, Any]) -> ManifestEntry:
+    def _new_tmp(self, doc_id: str) -> Path:
+        tmp = self._tmp_dir(doc_id)
+        shutil.rmtree(tmp, ignore_errors=True)
+        tmp.mkdir(parents=True)
+        return tmp
+
+    def _run_pandoc(self, doc: InputDoc, r: Route) -> Prepared:
         assert doc.path is not None and r.from_format is not None
+        tmp = self._new_tmp(doc.id)
+        prepared: PreparedHtml | None = None
+        pandoc_input = doc.path
+        if r.from_format == "html":
+            prepared = self._prepare_html(doc, tmp)
+            pandoc_input = self.work / doc.id / "prepared.html"
+            pandoc_input.parent.mkdir(parents=True, exist_ok=True)
+            pandoc_input.write_bytes(prepared.html.encode("utf-8"))
+        result = self.pandoc(r.from_format).convert(pandoc_input, tmp)
+        return Prepared(
+            result=result,
+            flags=list(prepared.flags) if prepared else [],
+            warnings=list(prepared.warnings) if prepared else [],
+            extra={"html": prepared.summary() if prepared else None},
+        )
+
+    def _convert_pdf(
+        self,
+        doc: InputDoc,
+        r: Route,
+        base: dict[str, Any],
+        source_sha: str,
+        version: str,
+        options: dict[str, Any],
+    ) -> ManifestEntry:
+        assert doc.path is not None
         start = time.monotonic()
-        converter = self.pandoc(r.from_format)
-        source_sha = sha256_file(doc.path)
+        layer: TextLayer = check_text_layer(doc.path, self.cfg.pdf)
+        flags = [FLAG_MIXED] if layer.mixed else []
+        warnings = []
+        if layer.mixed:
+            warnings.append(
+                f"text layer on {layer.text_pages} of {layer.pages} pages; pages without "
+                f"text: {_page_list(layer.pages_without_text)}"
+            )
+        if layer.ratio < self.cfg.pdf.min_text_page_ratio:
+            return ManifestEntry(
+                **{**base, "route": "none:no_text_layer"},
+                status="no_text_layer",
+                source_sha256=source_sha,
+                tool_versions={"specconv": __version__},
+                flags=flags,
+                warnings=warnings,
+                error=(
+                    f"text layer on {layer.text_pages} of {layer.pages} pages "
+                    f"({layer.ratio:.0%}, need {self.cfg.pdf.min_text_page_ratio:.0%}); "
+                    "not converted (image-only or damaged PDF; OCR is out of scope)"
+                ),
+                duration_s=round(time.monotonic() - start, 3),
+            )
+        tmp = self._new_tmp(doc.id)
+        result = self.docling().convert(
+            doc.path, tmp, json_path=self.work / f"{doc.id}.docling.json"
+        )
+        dropped = result.details.get("dropped_as_page_furniture") or []
+        if dropped:
+            warnings.append(
+                f"{len(dropped)} text item(s) left out as page headers or footers; "
+                "listed in conversion.json under docling.dropped_as_page_furniture"
+            )
+        prepared = Prepared(
+            result=result,
+            flags=flags,
+            warnings=warnings,
+            extra={"text_layer": layer.summary(), "docling": result.details},
+        )
+        return self._convert(doc, base, source_sha, options, prepared)
+
+    # ------------------------------------------------------------ finishing
+
+    def _convert(
+        self,
+        doc: InputDoc,
+        base: dict[str, Any],
+        source_sha: str,
+        options: dict[str, Any],
+        prepared: Prepared,
+    ) -> ManifestEntry:
+        """Shared steps: post-process, front matter, files, swap, manifest entry."""
+        assert doc.path is not None
+        start = time.monotonic()
+        result = prepared.result
+        tmp = self._tmp_dir(doc.id)
         final_dir = self.output / doc.id
         md_name = f"{doc.id}.md"
         previous = read_previous(final_dir / md_name)
 
-        tmp = self._tmp_dir(doc.id)
-        shutil.rmtree(tmp, ignore_errors=True)
-        tmp.mkdir(parents=True)
-
-        warnings: list[str] = []
-        pandoc_input = doc.path
-        if r.from_format == "html":
-            cleaned = clean_html(doc.path.read_bytes(), self.cfg.html.strip_tags)
-            pandoc_input = self.work / doc.id / "clean.html"
-            pandoc_input.parent.mkdir(parents=True, exist_ok=True)
-            pandoc_input.write_bytes(cleaned.html.encode("utf-8"))
-            log.debug(
-                "%s: removed %s; source encoding %s",
-                doc.id,
-                cleaned.removed or "nothing",
-                cleaned.original_encoding,
-            )
-
-        result = converter.convert(pandoc_input, tmp, resource_dir=doc.path.resolve().parent)
-        warnings += [f"pandoc: {w}" for w in result.warnings]
+        warnings = list(prepared.warnings)
+        warnings += [f"{result.tool}: {w}" for w in result.warnings]
         processed = postprocess(result.markdown, tmp)
         warnings += processed.warnings
 
@@ -200,6 +358,7 @@ class Pipeline:
             source_sha256=source_sha,
             converted_with=f"{result.tool} {result.tool_version}",
             converted_at=utc_now(),
+            flags=list(prepared.flags),
         )
         carried = carry_over(fm, processed.markdown, previous)
         warnings += carried.warnings
@@ -208,14 +367,6 @@ class Pipeline:
             render_document(carried.front_matter, processed.markdown).encode("utf-8")
         )
         shutil.copyfile(doc.path, tmp / f"source{doc.path.suffix.lower()}")
-        duration = round(time.monotonic() - start, 3)
-        strip_tags = list(self.cfg.html.strip_tags) if r.from_format == "html" else None
-        options = {
-            "route": r.name,
-            "converter": result.options,
-            "strip_tags": strip_tags,
-            "postprocess_version": POSTPROCESS_VERSION,
-        }
         conversion = {
             "id": doc.id,
             "tool": result.tool,
@@ -223,8 +374,12 @@ class Pipeline:
             "options": options,
             "media": [p.as_posix() for p in result.media],
             "warnings": warnings,
+            **prepared.extra,
             "converted_at": fm.converted_at,
-            "duration_s": {"convert": result.duration_s, "total": duration},
+            "duration_s": {
+                "convert": result.duration_s,
+                "finish": round(time.monotonic() - start, 3),
+            },
         }
         (tmp / "conversion.json").write_bytes(
             (json.dumps(conversion, indent=2, ensure_ascii=False) + "\n").encode("utf-8")
@@ -240,9 +395,43 @@ class Pipeline:
             tool_versions={"specconv": __version__, result.tool: result.tool_version},
             options=options,
             options_hash=options_hash(options),
+            flags=list(prepared.flags),
             warnings=warnings,
-            duration_s=duration,
+            duration_s=round(result.duration_s + time.monotonic() - start, 3),
         )
+
+    def _prepare_html(self, doc: InputDoc, tmp: Path) -> PreparedHtml:
+        """Clean the HTML, rewrite self-links and copy local images into tmp/media."""
+        assert doc.path is not None
+        known: list[OwnUrl] = []
+        if doc.rel_path is not None:
+            configured = self.cfg.self_url_for(doc.rel_path)
+            if configured:
+                known.append(OwnUrl(configured, "self_urls"))
+        prepared = prepare_html(
+            doc.path.read_bytes(),
+            strip_tags=self.cfg.html.strip_tags,
+            media_dir=tmp / MEDIA_DIR,
+            html_path=doc.path,
+            known_urls=known,
+        )
+        log.debug(
+            "%s: own URLs %s; %d self-links rewritten; removed %s; images %d copied, "
+            "%d remote, %d missing",
+            doc.id,
+            [u.url for u in prepared.own_urls] or "unknown",
+            prepared.self_links_rewritten,
+            prepared.removed or "nothing",
+            len(prepared.images_copied),
+            prepared.images_remote,
+            len(prepared.images_missing),
+        )
+        return prepared
+
+
+def _page_list(pages: list[int], limit: int = 20) -> str:
+    shown = ", ".join(map(str, pages[:limit]))
+    return shown + (f" … ({len(pages) - limit} more)" if len(pages) > limit else "")
 
 
 def _swap_into_place(tmp: Path, final_dir: Path) -> None:

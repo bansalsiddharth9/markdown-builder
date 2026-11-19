@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import shutil
 from pathlib import Path
 
@@ -29,9 +30,16 @@ def in_tmp(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return tmp_path
 
 
+REPO_CONFIG = Path(__file__).resolve().parents[2] / "config" / "specconv.yaml"
+
+
 def convert(*extra: str):
+    """Run convert in the test's folder with the project config (pinned models),
+    unless the test passes its own --config."""
+    config = [] if "--config" in extra else ["--config", str(REPO_CONFIG)]
     return runner.invoke(
-        cli.app, ["convert", "--input", "input", "--output", "output", "--work", "work", *extra]
+        cli.app,
+        ["convert", "--input", "input", "--output", "output", "--work", "work", *config, *extra],
     )
 
 
@@ -160,7 +168,7 @@ def test_validated_reset_when_body_changes(input_dir: Path) -> None:
 def test_unreadable_existing_front_matter_fails_without_overwriting(input_dir: Path) -> None:
     convert()
     md_path("sample-spec").write_text("---\nid: [broken\n---\nhand edited\n", encoding="utf-8")
-    result = convert()
+    result = convert("--force")
     assert result.exit_code == 1
     assert md_path("sample-spec").read_text(encoding="utf-8").endswith("hand edited\n")
     entry = read_manifest(Path("output/manifest.json")).get("sample-spec")
@@ -171,7 +179,7 @@ def test_unreadable_existing_front_matter_fails_without_overwriting(input_dir: P
 def test_reconversion_replaces_folder(input_dir: Path) -> None:
     convert()
     (Path("output/sample-spec/media/stale.png")).write_bytes(b"old")
-    convert()
+    convert("--force")
     assert not Path("output/sample-spec/media/stale.png").exists()
 
 
@@ -193,13 +201,14 @@ def test_failed_reconversion_keeps_previous_output(input_dir: Path) -> None:
 def test_unsupported_skipped_pdf_and_exit_code(input_dir: Path) -> None:
     (input_dir / "legacy.doc").write_bytes(b"x")
     (input_dir / "notes.txt").write_text("x", encoding="utf-8")
-    (input_dir / "scan.pdf").write_bytes(b"%PDF-1.4")
+    (input_dir / "broken.pdf").write_bytes(b"%PDF-1.4")
     result = convert()
-    assert result.exit_code == 1  # the PDF fails until phase 3
+    assert result.exit_code == 1  # the damaged PDF fails
     manifest = read_manifest(Path("output/manifest.json"))
     assert manifest.get("legacy").status == "unsupported"
     assert manifest.get("legacy").source_type == "doc"
-    assert manifest.get("scan").status == "failed" and "phase 3" in manifest.get("scan").error
+    assert manifest.get("broken").status == "failed"
+    assert "PDF cannot be read" in manifest.get("broken").error
     assert manifest.get("notes") is None
     assert "skipped (not a PDF, HTML or DOCX file): notes.txt" in result.output
 
@@ -314,3 +323,57 @@ def test_scan_reuses_previous_ids(tmp_path: Path) -> None:
         ("a", "b.html"),
         ("c-2", "c.html"),
     ]
+
+
+# ------------------------------------------- saved page (design: Testing)
+
+
+@pytest.fixture
+def saved_input(tmp_path: Path, fixture_mod: dict) -> Path:
+    folder = tmp_path / "input"
+    folder.mkdir(exist_ok=True)
+    fixture_mod["build_saved_page"](folder)
+    return folder
+
+
+def test_saved_page_end_to_end(saved_input: Path, fixture_mod: dict) -> None:
+    result = convert()
+    assert result.exit_code == 0, result.output
+    manifest = read_manifest(Path("output/manifest.json"))
+    assert [e.id for e in manifest.entries] == ["sample-saved-spec"]  # _files not scanned
+    fm, md = parse_document(md_path("sample-saved-spec").read_text(encoding="utf-8"))
+    own = fixture_mod["SAVED_URL"]
+    assert f"]({own}#" not in md and "index.html#" not in md  # all self-links rewritten
+    assert "](https://www.w3.org/TR/ttml2/#timing)" in md  # other documents unchanged
+    assert f"]({own})" in md  # S1: no fragment, unchanged
+    assert '## <a id="sec-intro"></a><a id="x1-introduction"></a><span id="intro"></span>' in md
+    assert '<a id="tbl-row-rcl"></a><a id="tbl-row-eoc"></a>\n\n| Code |' in md
+    # every in-page link has a target
+    ids = set(re.findall(r'\bid="([^"]+)"', md))
+    assert set(re.findall(r"\]\(#([^)\s]+)\)", md)) <= ids
+    # images: copied, web, missing (I1, I2)
+    assert "](media/figure-1.png)" in md
+    assert Path("output/sample-saved-spec/media/figure-1.png").is_file()
+    assert "](https://www.w3.org/logo.png)" in md
+    assert "](./Sample%20Saved%20Spec_files/missing.png)" in md
+    assert any("missing.png" in w for w in manifest.get("sample-saved-spec").warnings)
+    conversion = json.loads(
+        Path("output/sample-saved-spec/conversion.json").read_text(encoding="utf-8")
+    )
+    assert conversion["html"]["self_links_rewritten"] == 4
+    assert conversion["html"]["own_urls"] == [{"url": own, "origin": "saved-from comment"}]
+    assert fm.flags == []
+
+
+def test_self_urls_config_and_unknown_flag(input_dir: Path, write) -> None:
+    (input_dir / "page.html").write_text(
+        '<h2 id="a">A</h2><p><a href="https://ex.org/spec/#a">self</a></p>', encoding="utf-8"
+    )
+    assert convert().exit_code == 0
+    fm, md = parse_document(md_path("page").read_text(encoding="utf-8"))
+    assert fm.flags == ["self_url_unknown"]
+    assert read_manifest(Path("output/manifest.json")).get("page").flags == ["self_url_unknown"]
+    write("c.yaml", "self_urls:\n  page.html: https://ex.org/spec/\n")
+    assert convert("--config", "c.yaml").exit_code == 0
+    fm, md = parse_document(md_path("page").read_text(encoding="utf-8"))
+    assert fm.flags == [] and "](#a)" in md

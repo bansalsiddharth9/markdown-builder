@@ -143,7 +143,7 @@ STRIPPED_TEXT = "THIS TEXT MUST BE STRIPPED"  # inside <script>, <style> and <no
 
 
 def tiny_png(rgb: tuple[int, int, int] = (0, 128, 255)) -> bytes:
-    """A valid 2x2 PNG."""
+    """A valid 2x2 PNG (scaled up by CSS where a visible figure is needed)."""
 
     def chunk(kind: bytes, data: bytes) -> bytes:
         return (
@@ -173,7 +173,10 @@ def render_html(spec: list = SPEC) -> str:
         "<head>",
         '<meta charset="utf-8">',
         "<title>Sample Caption Display Specification</title>",
-        f"<style>body {{ font-family: serif; }} /* {STRIPPED_TEXT} */</style>",
+        f"<style>body {{ font-family: serif; }} /* {STRIPPED_TEXT} */\n"
+        "table, th, td { border: 1px solid #000; border-collapse: collapse; }\n"
+        "th, td { padding: 4px 8px; } img { width: 240px; height: 160px; }\n"
+        "pre { background: #f4f4f4; border: 1px solid #ccc; padding: 8px; }</style>",
         f"<script>console.log('{STRIPPED_TEXT}');</script>",
         "</head>",
         "<body>",
@@ -262,6 +265,121 @@ def render_docx(path: Path, image_dir: Path, spec: list = SPEC) -> None:
             document.add_picture(str(image_dir / block.file), width=Inches(1))
             document.add_paragraph(block.alt, style="Caption")
     document.save(str(path))
+
+
+# -------------------------------------------------------------- saved page
+
+SAVED_URL = "https://www.w3.org/TR/2099/REC-sample-20990101/"
+SAVED_NAME = "Sample Saved Spec"
+
+
+def render_saved_page() -> str:
+    """A page as a browser's "Save page as, complete" writes it (design: Testing):
+    in-page links written as the document's full URL, a saved-from comment,
+    images in a _files folder, ids on a section and its heading, and a table
+    whose rows are link targets. Also a web image, a missing image, an old-style
+    empty anchor inside a heading, a link to another spec and one to the top."""
+    u = SAVED_URL
+    files = "./Sample%20Saved%20Spec_files"
+    return f"""<!DOCTYPE html>
+<!-- saved from url=({len(u):04d}){u} -->
+<html lang="en"><head><meta charset="utf-8">
+<title>Sample Saved Spec</title>
+<link rel="stylesheet" href="{files}/base.css">
+<script src="{files}/respec.js"></script>
+</head><body>
+<nav id="toc"><ol>
+<li><a href="{u}#sec-intro">1 Introduction</a></li>
+<li><a href="{u}#sec-codes">2 Codes</a></li>
+</ol></nav>
+<section id="sec-intro"><h2 id="x1-introduction"><a id="intro"></a>1 Introduction</h2>
+<p>See the <a href="{u.replace("https:", "http:")}index.html#tbl-row-eoc">EOC row</a> and the
+<dfn id="dfn-caption">caption</dfn> definition. Another spec:
+<a href="https://www.w3.org/TR/ttml2/#timing">TTML2 timing</a>. Top of
+<a href="{u}">this document</a>.</p>
+<p><img src="{files}/figure-1.png" alt="Figure 1">
+<img src="https://www.w3.org/logo.png" alt="W3C logo">
+<img src="{files}/missing.png" alt="Missing figure"></p>
+</section>
+<section id="sec-codes"><h2 id="x2-codes">2 Codes</h2>
+<table><caption>Table 1</caption>
+<tr><th>Code</th><th>Command</th></tr>
+<tr id="tbl-row-rcl"><td>1420</td><td>RCL</td></tr>
+<tr id="tbl-row-eoc"><td>142F</td><td>EOC</td></tr>
+</table>
+<p>Uses <a href="{u}#dfn-caption">caption</a> and row <a href="#tbl-row-rcl">RCL</a>.</p>
+</section>
+</body></html>
+"""
+
+
+def build_saved_page(dest: Path) -> Path:
+    """Write the saved page and its _files folder into dest; return the HTML path."""
+    files = dest / f"{SAVED_NAME}_files"
+    files.mkdir(parents=True, exist_ok=True)
+    (files / "figure-1.png").write_bytes(tiny_png((200, 0, 0)))
+    (files / "base.css").write_text("body { margin: 0; }\n", encoding="utf-8")
+    (files / "respec.js").write_text("// saved script\n", encoding="utf-8")
+    (files / "frame.html").write_text("<p>saved iframe</p>\n", encoding="utf-8")
+    page = dest / f"{SAVED_NAME}.html"
+    page.write_text(render_saved_page(), encoding="utf-8")
+    return page
+
+
+# --------------------------------------------------------------------- PDF
+
+
+def render_pdfs(dest: Path, html: Path) -> dict[str, Path]:
+    """PDF fixtures (design: Testing), made with Playwright's Chromium:
+
+    - sample-spec.pdf: the HTML fixture printed with page.pdf() (born-digital)
+    - image-only.pdf: screenshots of that page, so no page has a text layer
+    - mostly-text.pdf: 3 text pages + 1 image page (75% text: Docling, mixed)
+    - mostly-image.pdf: 1 text page + 3 image pages (25% text: no_text_layer, mixed)
+    """
+    import base64
+
+    from playwright.sync_api import sync_playwright
+    from pypdf import PdfReader, PdfWriter
+
+    text_pdf = dest / "sample-spec.pdf"
+    image_pdf = dest / "image-only.pdf"
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page()
+        page.goto(html.resolve().as_uri())
+        page.pdf(path=str(text_pdf), format="A4", print_background=True)
+        shot = base64.b64encode(page.screenshot(full_page=True)).decode("ascii")
+        page.set_content(
+            "<style>@page{margin:0} body{margin:0} img{width:100%}</style>"
+            + "".join(f'<img src="data:image/png;base64,{shot}">' for _ in range(2))
+        )
+        page.pdf(path=str(image_pdf), format="A4")
+        browser.close()
+
+    def merge(target: Path, parts: list[tuple[Path, int]]) -> Path:
+        writer = PdfWriter()
+        for source, index in parts:
+            writer.add_page(PdfReader(source).pages[index])
+        with target.open("wb") as fh:
+            writer.write(fh)
+        return target
+
+    # Pages are reused (modulo) because the printed fixture is only two pages long.
+    n_text = len(PdfReader(text_pdf).pages)
+    n_image = len(PdfReader(image_pdf).pages)
+    return {
+        "pdf": text_pdf,
+        "image_pdf": image_pdf,
+        "mostly_text_pdf": merge(
+            dest / "mostly-text.pdf",
+            [(text_pdf, i % n_text) for i in range(3)] + [(image_pdf, 0)],
+        ),
+        "mostly_image_pdf": merge(
+            dest / "mostly-image.pdf",
+            [(text_pdf, 0)] + [(image_pdf, i % n_image) for i in range(3)],
+        ),
+    }
 
 
 # --------------------------------------------------------------------- all

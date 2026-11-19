@@ -3,15 +3,26 @@ block (design: Converter tests)."""
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pytest
-from specconv.converters.pandoc import PandocConverter
-from specconv.htmlclean import clean_html
+from specconv.converters.pandoc import ANCHORS_FILTER, PandocConverter
+from specconv.htmlprep import prepare_html
 from specconv.postprocess import postprocess
+
+STRIP = ("script", "style", "noscript")
+ANCHOR = re.compile(r'<a id="[^"]*"></a>')
 
 
 def convert(src: Path, fmt: str, out_dir: Path) -> str:
+    """Convert like the pipeline does: HTML is prepared first (images, cleanup)."""
+    if fmt == "html":
+        prepared = prepare_html(
+            src.read_bytes(), strip_tags=STRIP, media_dir=out_dir / "media", html_path=src
+        )
+        src = out_dir.parent / f"{out_dir.name}-prepared.html"
+        src.write_text(prepared.html, encoding="utf-8")
     result = PandocConverter(fmt).convert(src, out_dir)
     return postprocess(result.markdown, out_dir).markdown
 
@@ -25,10 +36,23 @@ def converted(request, fixtures: dict[str, Path], tmp_path: Path) -> tuple[str, 
 
 def test_all_headings_present(converted, fixture_mod: dict) -> None:
     fmt, md, _ = converted
+    plain = ANCHOR.sub("", md)
     Heading = fixture_mod["Heading"]
     for block in fixture_mod["SPEC"]:
         if isinstance(block, Heading):
-            assert f"{'#' * block.level} {block.text}\n" in md, (fmt, block.text)
+            assert f"{'#' * block.level} {block.text}\n" in plain, (fmt, block.text)
+
+
+def test_heading_anchors_only_from_source_ids(converted, fixture_mod: dict) -> None:
+    fmt, md, _ = converted
+    for block in fixture_mod["SPEC"]:
+        if isinstance(block, fixture_mod["Heading"]):
+            line = f'{"#" * block.level} <a id="{block.anchor}"></a>{block.text}\n'
+            if fmt == "html":
+                assert line in md
+            else:
+                # DOCX headings carry no ids, and Pandoc must not invent any
+                assert "<a id=" not in md
 
 
 def test_all_paragraph_text_present(converted, fixture_mod: dict) -> None:
@@ -42,15 +66,9 @@ def test_code_blocks_exact(converted, fixture_mod: dict) -> None:
     fmt, md, _ = converted
     for block in fixture_mod["SPEC"]:
         if isinstance(block, fixture_mod["Code"]):
-            if fmt == "html":
-                # fenced: the code text appears verbatim
-                assert f"\n{block.text}\n```" in md, fmt
-            else:
-                # DOCX "Source Code" paragraphs become an indented code block
-                indented = "\n".join(
-                    ("    " + line) if line else "" for line in block.text.split("\n")
-                )
-                assert indented in md, fmt
+            # fenced for both: DOCX "Source Code" paragraphs have no attributes,
+            # so the anchors filter writes the fence itself
+            assert f"\n{block.text}\n```" in md, fmt
 
 
 def test_merged_cell_table_kept_as_html_with_spans(converted) -> None:
@@ -66,7 +84,7 @@ def test_simple_table_is_pipe_table(converted) -> None:
     assert "| Columns  | 32 columns |" in md
 
 
-def test_image_extracted_with_relative_link(converted) -> None:
+def test_image_in_media_with_relative_link(converted) -> None:
     fmt, md, out = converted
     media = [p for p in (out / "media").rglob("*") if p.is_file()]
     assert len(media) == 1, fmt
@@ -83,28 +101,9 @@ def test_values_and_unicode_preserved(converted) -> None:
 def test_script_style_noscript_removed_from_html(
     fixtures: dict[str, Path], tmp_path: Path, fixture_mod: dict
 ) -> None:
-    raw = fixtures["html"].read_bytes()
-    assert fixture_mod["STRIPPED_TEXT"].encode() in raw
-    cleaned = clean_html(raw, ("script", "style", "noscript"))
-    assert cleaned.removed == {"script": 1, "style": 1, "noscript": 1}
-    src = tmp_path / "clean.html"
-    src.write_text(cleaned.html, encoding="utf-8")
-    result = PandocConverter("html").convert(
-        src, tmp_path / "out", resource_dir=fixtures["html"].parent
-    )
-    assert fixture_mod["STRIPPED_TEXT"] not in result.markdown
-
-
-def test_clean_html_converts_other_encodings_to_utf8() -> None:
-    raw = '<html><head><meta charset="iso-8859-1"></head><body><p>Café</p></body></html>'
-    cleaned = clean_html(raw.encode("iso-8859-1"), ())
-    assert "Café" in cleaned.html
-    assert cleaned.original_encoding == "iso-8859-1"
-
-
-def test_clean_html_leaves_pre_whitespace() -> None:
-    raw = b"<pre>  a  \n\n   b\t</pre><script>x</script>"
-    assert clean_html(raw, ("script",)).html == "<pre>  a  \n\n   b\t</pre>"
+    assert fixture_mod["STRIPPED_TEXT"].encode() in fixtures["html"].read_bytes()
+    md = convert(fixtures["html"], "html", tmp_path / "out")
+    assert fixture_mod["STRIPPED_TEXT"] not in md
 
 
 def test_output_deterministic(fixtures: dict[str, Path], tmp_path: Path) -> None:
@@ -117,22 +116,46 @@ def test_output_deterministic(fixtures: dict[str, Path], tmp_path: Path) -> None
 def test_options_and_command() -> None:
     conv = PandocConverter("docx")
     assert conv.options() == {
-        "from": "docx",
+        "from": "docx-auto_identifiers",
         "to": "gfm",
         "wrap": "none",
-        "extract_media": "media",
+        "sandbox": True,
+        "lua_filter": "anchors.lua",
+        "anchor_headings": "targeted",
         "track_changes": "accept",
+        "extract_media": "media",
     }
-    cmd = conv.command(Path("/x/in.docx"))
-    assert cmd[1:] == [
+    assert conv.command(Path("/x/in.docx"))[1:] == [
         "/x/in.docx",
+        "--sandbox",
         "-f",
-        "docx",
+        "docx-auto_identifiers",
         "--track-changes=accept",
         "-t",
         "gfm",
         "--wrap=none",
+        "--metadata=anchor-headings:targeted",
+        f"--lua-filter={ANCHORS_FILTER}",
         "--extract-media=media",
-        "--resource-path=/x",
     ]
+    html = PandocConverter("html").command(Path("/x/in.html"))
+    assert "--sandbox" in html and not any(a.startswith("--extract-media") for a in html)
     assert conv.version().startswith("3.")
+
+
+def test_example_in_one_cell_table_becomes_code_block(tmp_path: Path) -> None:
+    """TTML2 style: each example is a bare <pre> boxed in a one-cell table (decision Q14)."""
+    src = tmp_path / "ex.html"
+    src.write_text(
+        '<p>See <a href="#ex1">the example</a>.</p>'
+        '<table class="example" id="ex1"><caption>Example – One</caption><tbody><tr><td>'
+        '<div class="exampleInner"><pre>&lt;tt&gt;\n  &lt;body/&gt;\n&lt;/tt&gt;</pre></div>'
+        "</td></tr></tbody></table>"
+        "<pre>plain   preformatted\n    text</pre>",
+        encoding="utf-8",
+    )
+    md = convert(src, "html", tmp_path / "out")
+    assert '<span id="ex1"></span>Example – One\n' in md
+    assert "```\n<tt>\n  <body/>\n</tt>\n```" in md
+    assert "```\nplain   preformatted\n    text\n```" in md
+    assert "<table" not in md and "<br />" not in md

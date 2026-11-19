@@ -28,3 +28,17 @@ def input_dir(tmp_path: Path, fixtures: dict[str, Path]) -> Path:
     for name in ("html", "docx", "image"):
         shutil.copy(fixtures[name], folder / fixtures[name].name)
     return folder
+
+
+@pytest.fixture(scope="session")
+def pdf_fixtures(fixtures: dict[str, Path], fixture_mod: dict, repo_root_session: Path) -> dict:
+    """PDF fixtures printed with Playwright's Chromium (generated once per session)."""
+    import os
+
+    os.environ.setdefault("PLAYWRIGHT_BROWSERS_PATH", str(repo_root_session / ".playwright"))
+    return fixture_mod["render_pdfs"](fixtures["html"].parent, fixtures["html"])
+
+
+@pytest.fixture(scope="session")
+def repo_root_session() -> Path:
+    return Path(__file__).resolve().parents[2]
