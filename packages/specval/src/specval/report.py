@@ -5,9 +5,9 @@
       <id>.json     full machine-readable findings
       <id>.md       human report: results table, then the findings to check
 
-The human report lists fail findings first, then warnings, each with its
-Markdown line and source location. The full review queue (pattern-matched
-tables, a page sample) is added in phase 6.
+The human report has the results table, then the review queue (design:
+Review queue) with Markdown line numbers and source locations, then the
+findings listed for information only.
 """
 
 from __future__ import annotations
@@ -18,9 +18,15 @@ import json
 import os
 from pathlib import Path
 
-from specval.model import FAIL, WARN
+from specval.model import FAIL, INFO, WARN
 from specval.runner import CHECK_ORDER, DocReport
 
+QUEUE_SECTIONS = (
+    ("fail", "1. Failures"),
+    ("table", "2. Tables to check (always reviewed)"),
+    ("warn", "3. Warnings"),
+    ("sample", "4. Random sample"),
+)
 SUMMARY_FIELDS = ("id", "source_type", "overall", *CHECK_ORDER, "fails", "warnings", "validated_at")
 
 
@@ -59,26 +65,36 @@ def render_markdown(report: DocReport) -> str:
     for check in report.checks:
         out.append(f"| {check.id} | {check.name} | {check.status} | {_cell(check.summary)} |")
     out.append("")
-    for severity, title in ((FAIL, "Must fix or explain (fail)"), (WARN, "To check (warn)")):
-        rows = [(c, f) for c in report.checks for f in c.findings if f.severity == severity]
-        if not rows:
+    out += ["## Review queue", "", "Work through it in order; each item says where to look.", ""]
+    for kind, title in QUEUE_SECTIONS:
+        items = [i for i in report.review_queue if i["kind"] == kind]
+        out += [f"### {title}", ""]
+        if not items:
+            out += ["None.", ""]
             continue
-        out += [f"## {title}", ""]
-        for number, (check, finding) in enumerate(rows, start=1):
+        for number, item in enumerate(items, start=1):
             where = []
-            if finding.md_line is not None:
-                where.append(f"Markdown line {finding.md_line}")
-            if finding.source_loc:
-                where.append(f"source: {finding.source_loc}")
+            if item.get("md_line") is not None:
+                where.append(f"Markdown line {item['md_line']}")
+            if item.get("source_loc"):
+                where.append(f"source: {item['source_loc']}")
+            check = f"**{item['check']}** " if item.get("check") else ""
             out.append(
-                f"{number}. **{check.id}** {finding.message}"
-                + (f" ({'; '.join(where)})" if where else "")
+                f"{number}. {check}{item['text']}" + (f" ({'; '.join(where)})" if where else "")
             )
-            if finding.excerpt:
-                out.append(f"   > {_cell(finding.excerpt)}")
+            if item.get("excerpt"):
+                out.append(f"   > {_cell(item['excerpt'])}")
         out.append("")
-    if report.overall not in (FAIL, WARN) and report.checks:
-        out += ["Nothing to check from the checks run so far.", ""]
+    infos = [(c, f) for c in report.checks for f in c.findings if f.severity == INFO]
+    if infos:
+        out += ["## For information", ""]
+        for check, finding in infos:
+            loc = f" ({finding.source_loc})" if finding.source_loc else ""
+            line = f" (Markdown line {finding.md_line})" if finding.md_line else ""
+            out.append(f"- **{check.id}** {finding.message}{line}{loc}")
+            if finding.excerpt:
+                out.append(f"  > {_cell(finding.excerpt)}")
+        out.append("")
     return "\n".join(out)
 
 

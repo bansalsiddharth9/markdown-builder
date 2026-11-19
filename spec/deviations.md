@@ -79,6 +79,8 @@ The design chose option C (Lua filter writing `<a id>` anchors on the heading li
 | Q18 | — | Text Docling labels as a formula but cannot decode (its formula model is not used) is written as its original PDF text in a code block, instead of Docling's `<!-- formula-not-decoded -->`; counted in `conversion.json` as `docling.formulas_as_text` | **Content loss found by V4:** on CEA-608-E page 41 the URL syntax `<url>[attr1:val1]…[checksum]` and its example were replaced by the placeholder. A code block keeps `<` and `[` exact. | implemented |
 | Q19 | `clean: none` removes only `<script>`, `<style>`, `<noscript>` | `<template>` is removed too (default `html.strip_tags`) | Browsers never display `<template>` content. The saved TTML2 page contained an Adobe Acrobat extension's button ("AI Assistant") inside one, which Pandoc converted into 5 icons and text. Found by V1 (image count). | implemented |
 | Q20 | — | Tables Docling labels as a document index (table of contents, list of tables, list of figures) are written as a bullet list, one entry per row, text exactly as in the PDF (dot leaders and page numbers kept, Markdown characters escaped); counted in `conversion.json` as `docling.document_index_as_list` | Decided by the user (2026-11-19): the contents pages of CEA-608-E (PDF pages 6–13) came out as 8 one-column tables. Real tables are unaffected. | implemented |
+| Q21 | — | Pandoc runs with `--preserve-tabs` | Pandoc's default turns tabs in code into spaces, so 3 TTML2 examples were not byte-exact. Found by V6 in phase 6. | implemented |
+| Q22 | — | A second Lua filter, `spacing.lua`, moves whitespace at the edges of inline code and emphasis outside the markup | CommonMark drops one space at each end of a code span that starts and ends with a space (TTML2 `<length-1>top<length-2>`) and does not read `*S' *` (a non-breaking space before the closing `*`) as emphasis, so readers saw lost spaces and stray asterisks. The visible text is unchanged. Found by V5 and V3. | implemented |
 
 
 ### Code examples inside table cells (TTML2): resolved (Q14, Q15, Q16)
@@ -141,7 +143,7 @@ These are not fixed in the converter (design principle 1: never "fix" content). 
 | C5 | `convert --input input/ --sources sources.yaml` | Both are optional, but at least one is required | Allows converting only files or only web pages. | implemented |
 | C6 | A log file per run | `convert` → `output/run-<timestamp>.log`; `fetch` → `work/fetch-<timestamp>.log`; `specval run` → `validation/run-<timestamp>.log` | The design only names the `convert` log location. | implemented |
 | C8 | — | New command `specconv download-models [--force]` | Fetches the pinned Docling models (E8); needed once per machine and in the Docker image. | implemented |
-| C7 | — | Commands not built yet exit with code 1 and say "not implemented yet (phase N)" | Design principle 3: fail loudly, never pretend to succeed. Removed as each phase lands (`convert`: phase 2; `fetch`: phase 4; `specval run`: phase 5; `specval approve` and `--split` still to come: phases 6 and 7). | implemented |
+| C7 | — | Commands not built yet exit with code 1 and say "not implemented yet (phase N)" | Design principle 3: fail loudly, never pretend to succeed. Removed as each phase lands (`convert`: phase 2; `fetch`: phase 4; `specval run`: phase 5; `specval approve`: phase 6; `--split` still to come: phase 7). | implemented |
 
 ## Data formats
 
@@ -190,11 +192,42 @@ Pandoc only recognizes the paragraph style named exactly `Source Code` as code. 
 | SAMI | warn | 9 images that exist only on the web; one heading level jump (1 to 3) that is in the source. |
 | CEA-608-E | fail | Table count: Markdown 70 (after Q20), pdfplumber 72; checked by the user, no table missing (FS-1). Real things to review: a "2. Text and XDS" heading inside Annex E that is probably a list item; one table where Docling merged two rows ("63 64 c d c d"); pypdf reads `attr 1:val1` with a space where Docling has none. Before Q18 it also reported the lost URL syntax on page 41. |
 
+## Validator (phase 6)
+
+| # | Topic | Implementation | Why | Status |
+| --- | --- | --- | --- | --- |
+| V-s | V3 normalization | Besides NFKC and whitespace: dash and quote variants unified, runs of 3+ leader dots treated as one "...", PDF words hyphenated across lines joined | Docling turns "–" into "-" (exact characters are V4's job); pypdf and Docling read a different number of leader dots in contents lines. | implemented |
+| V-t | V3 units for PDFs | Each printed line is split into sentences on its own | PDF text has no paragraphs: a heading without a full stop glued onto the next sentence, and Docling can put blocks in another order (seen on the fixture's WebVTT example). | implemented |
+| V-u | V3 listing | Missing sentences are listed (up to 50) as fail or warn findings when coverage is below the thresholds, otherwise as "info" (listed in the report, status unchanged) | The design lists every missing sentence but sets the status by coverage. | implemented |
+| V-v | V5 HTML/DOCX | Tables compared as grids with spans expanded (a merged cell's text in every position it covers); rows aligned so a missing or extra row is named once; an empty first Markdown row is ignored when the Markdown has one row more (Pandoc's header row for tables without one); a cell's paragraphs are joined by a space | Locations: table number, row, column, and the Markdown line of the cell. | implemented |
+| V-w | V5 PDF | pdfplumber tables with only empty cells are ignored (FS-1); disagreements with a paired pdfplumber table are warnings; cells of unpaired Docling tables not found in the PDF text are failures; cells compared without spaces and with V3's normalization | Two approximate extractors: a disagreement narrows what to check but proves nothing; a cell that is nowhere in the PDF text is a real problem. | implemented |
+| V-x | V6 XML | A block is XML when tagged xml/ttml or when it starts with "<" and has a closing tag, "/>", a declaration or a comment; fragments are parsed inside a wrapper element that declares the prefixes they use; a parse error the paired source block also has is "info" | Spec examples are fragments; `<url>[attr:val]` (CEA-608-E) is not XML; a faithful copy of a non-well-formed example is not a conversion error (TTML2's syntax boxes). | implemented |
+| V-y | V6 WebVTT | Cue settings after the timing must be `name:value` tokens | Otherwise cue text joined onto the timing line (Docling's lost line breaks) would pass. | implemented |
+| V-z | V8 | Tokens of hex digits with at least one digit and one of O, o, l, I, S (and an x only as the 0x prefix, an h only at the end); a token the source has as often is not reported | A faithful copy is not a confusion. | implemented |
+| V-aa | Review queue samples | PDF: pages; HTML and DOCX: sections from the top two heading levels; seed is `<seed>:<document id>` | Repeatable per document. | implemented |
+| V-ab | `specval approve` | Refuses when there is no report, the document was not converted, the Markdown changed since the report (SHA-256 recorded in the report), or the report has fail findings without `--override`; an override is recorded in `manual_fixes` as `{type: approval override, reason, date, by, fail_findings}` | An approval must cover exactly the file that was checked. | implemented |
+
+### Known Docling limitations found in phase 6 (CEA-608-E and the fixture)
+
+- A code block can be split in two and the parts put in another order (fixture WebVTT example).
+- Some rows of the contents pages are dropped (e.g. "7.5 Other Real-Time Display Methods"); the sections themselves are converted.
+- Text inside diagrams is part of the image, so V3 lists it as missing (e.g. waveform labels on page 27).
+- Footnote markers can move to another cell (`MPA4` vs `MPA`).
+
+### Real specs (phase 6)
+
+| Spec | Result |
+| --- | --- |
+| TTML2 | pass on all nine checks (after Q21 and Q22); 5,959 sentences, 129 tables and 272 code blocks compared. |
+| SAMI | warn: only V7 (web images, one heading level jump in the source). |
+| CEA-608-E | fail, with genuine findings: V1 table count (FS-1), V2 stray "2." heading, V3 98.9% (contents rows and diagram text, see above), V4 two tokens, V5 13 cells not found and some extractor disagreements. |
+
 ## Future scope (to be checked later)
 
 | # | Topic | Detail | Possible approach |
 | --- | --- | --- | --- |
 | FS-1 | V1 table count for PDFs is misleading | pdfplumber, the second PDF reader, counts diagrams with drawn boxes as tables and cannot see tables without ruled lines. CEA-608-E: it finds 4 "tables" in Figures 2, 7 and 8 (PDF pages 26, 101, 104; all cells empty) and misses the two abbreviation lists (pages 18–19), so V1 reports 72 against the Markdown's 70 and fails although no table is missing (checked by the user, 2026-11-19). V1 also gives only the totals, not where they differ. | Report the pages where the counts differ; ignore pdfplumber tables whose cells are all empty or that lie on a Docling picture; reconsider in phase 6 together with V5, which pairs tables by page. |
+| FS-2 | V6 lists TTML2's syntax boxes (`count = xsd:integer`) as "XML not well-formed (the source has the same problem)" | They start with `<` and contain closing tags, so they are parsed; the findings are info only and do not change the status, but they make the report long. | Recognize the W3C "syntax" box (class `syntax` on the source table) and skip XML parsing for it. |
 
 ## Web application still open (affect phases 9 to 11)
 

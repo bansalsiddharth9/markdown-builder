@@ -74,13 +74,13 @@ def test_run_writes_reports_and_summary(out: Path, in_tmp: Path) -> None:
     with (val / "summary.csv").open(encoding="utf-8") as fh:
         rows = {r["id"]: r for r in csv.DictReader(fh)}
     assert set(rows) == set(DOC_IDS.values())
-    assert rows["sample-spec"]["overall"] == "pass" and rows["sample-spec"]["V3"] == "not_run"
+    assert rows["sample-spec"]["overall"] == "pass" and rows["sample-spec"]["V3"] == "pass"
     assert rows["sample-saved-spec"]["overall"] == "fail"
     assert rows["sample-saved-spec"]["V7"] == "fail" and rows["sample-saved-spec"]["fails"] == "1"
     report = json.loads((val / "sample-saved-spec.json").read_text(encoding="utf-8"))
     assert [c["id"] for c in report["checks"]] == [f"V{i}" for i in range(1, 10)]
     human = (val / "sample-saved-spec.md").read_text(encoding="utf-8")
-    assert "Overall: **FAIL**" in human and "## Must fix or explain (fail)" in human
+    assert "Overall: **FAIL**" in human and "### 1. Failures" in human
     assert "image file missing: ./Sample%20Saved%20Spec_files/missing.png (Markdown line" in human
 
 
@@ -123,6 +123,6 @@ def test_approve_unknown_doc_exits_2(output: Path) -> None:
     assert invoke("approve", "nope", "--output", str(output)).exit_code == 2
 
 
-def test_approve_stub_fails_loudly(output: Path) -> None:
+def test_approve_without_report_fails(output: Path) -> None:
     result = invoke("approve", "doc-a", "--output", str(output), "--by", "Sam")
-    assert result.exit_code == 1 and "not implemented yet" in result.output
+    assert result.exit_code == 1 and "run 'specval run --doc doc-a' first" in result.output

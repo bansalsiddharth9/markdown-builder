@@ -7,6 +7,7 @@ options the converter used (HTML cleanup, encoding of a fetched page).
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import time
@@ -18,21 +19,18 @@ from common.frontmatter import FrontMatterError, parse_document
 from common.manifest import ManifestEntry
 
 from specval import __version__
-from specval.checks import CHECKS, Document
-from specval.config import SpecvalConfig
+from specval.checks import CHECKS as CORE_CHECKS
+from specval.checks import Document
+from specval.checks_more import check_v3, check_v5, check_v6, check_v8, check_v9
+from specval.config import AcceptanceQuestion, SpecvalConfig
 from specval.markdown import parse_markdown
-from specval.model import FAIL, NOT_RUN, CheckResult, Finding, overall
+from specval.model import FAIL, CheckResult, Finding, overall
 from specval.reference import Reference, from_docx, from_html, from_pdf
+from specval.review import build_queue
 
 log = logging.getLogger("specval.runner")
 
-LATER_CHECKS = (  # built in phase 6
-    ("V3", "Text completeness"),
-    ("V5", "Table content"),
-    ("V6", "Code blocks"),
-    ("V8", "Character confusion"),
-    ("V9", "Acceptance questions"),
-)
+CHECKS = (*CORE_CHECKS, check_v3, check_v5, check_v6, check_v8, check_v9)
 CHECK_ORDER = ("V1", "V2", "V3", "V4", "V5", "V6", "V7", "V8", "V9")
 CONVERTED = frozenset({"ok", "skipped_unchanged"})
 CONVERSION_FAILED = frozenset({"failed", "no_text_layer"})
@@ -48,6 +46,8 @@ class DocReport:
     notes: list[str] = field(default_factory=list)
     validated_at: str = ""
     duration_s: float = 0.0
+    review_queue: list[dict[str, Any]] = field(default_factory=list)
+    markdown_sha256: str | None = None  # of the <id>.md that was checked (for approve)
 
     @property
     def is_failure(self) -> bool:
@@ -69,7 +69,9 @@ class DocReport:
             "specval_version": __version__,
             "duration_s": self.duration_s,
             "notes": self.notes,
+            "markdown_sha256": self.markdown_sha256,
             "checks": [c.to_dict() for c in self.checks],
+            "review_queue": self.review_queue,
         }
 
 
@@ -99,7 +101,11 @@ def load_reference(entry: ManifestEntry, source: Path, conversion: dict[str, Any
 
 
 def validate_document(
-    entry: ManifestEntry, output: Path, cfg: SpecvalConfig, now: str
+    entry: ManifestEntry,
+    output: Path,
+    cfg: SpecvalConfig,
+    now: str,
+    questions: list[AcceptanceQuestion] | None = None,
 ) -> DocReport:
     start = time.monotonic()
     report = DocReport(id=entry.id, entry=entry, overall=NOT_CONVERTED, validated_at=now)
@@ -160,6 +166,7 @@ def validate_document(
         reference=reference,
         conversion=conversion,
         source_path=source,
+        questions=list(questions or []),
     )
     results: dict[str, CheckResult] = {}
     for check in CHECKS:
@@ -176,8 +183,6 @@ def validate_document(
                 [Finding(FAIL, f"internal error: {type(exc).__name__}: {exc}")],
             )
         results[result.id] = result
-    for check_id, name in LATER_CHECKS:
-        results[check_id] = CheckResult(check_id, name, NOT_RUN, "built in phase 6")
     report.checks = [results[c] for c in CHECK_ORDER]
     if md is None:
         report.checks[CHECK_ORDER.index("V7")].findings.insert(
@@ -185,5 +190,8 @@ def validate_document(
         )
         report.checks[CHECK_ORDER.index("V7")].status = FAIL
     report.overall = overall([c.status for c in report.checks])
+    report.review_queue = build_queue(entry.id, report.checks, md, reference, cfg)
+    if full is not None:
+        report.markdown_sha256 = hashlib.sha256(md_path.read_bytes()).hexdigest()
     report.duration_s = round(time.monotonic() - start, 3)
     return report

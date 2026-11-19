@@ -15,6 +15,7 @@ from bs4 import BeautifulSoup, Tag
 from markdown_it import MarkdownIt
 from markdown_it.token import Token
 
+from specval.tablecheck import html_grid, html_grid_lines
 from specval.text import (
     CODE,
     HEADING_TAGS,
@@ -42,6 +43,20 @@ class MdTable:
     line: int
     kind: str  # pipe | html
     rows: tuple[tuple[str, ...], ...]
+    grid: tuple[tuple[str, ...], ...] = ()  # spans expanded (V5)
+    row_lines: tuple[int, ...] = ()  # line of each grid row
+    cell_lines: tuple[tuple[int, ...], ...] = ()  # line of each grid cell (HTML tables)
+    caption: str = ""  # an HTML table's <caption>
+
+    def line_of(self, row: int | None, col: int | None = None) -> int:
+        """Line of a grid cell (or row), falling back to the table's first line."""
+        if row is not None and col is not None and row < len(self.cell_lines):
+            cells = self.cell_lines[row]
+            if 0 <= col < len(cells):
+                return cells[col]
+        if row is not None and row < len(self.row_lines):
+            return self.row_lines[row]
+        return self.line
 
 
 @dataclass(frozen=True)
@@ -49,6 +64,7 @@ class MdCode:
     line: int
     text: str
     info: str  # fence info string ("xml"), "" for indented or HTML <pre>
+    first_line: int = 0  # line of the code's first line (after a fence)
 
 
 @dataclass(frozen=True)
@@ -130,6 +146,7 @@ class _Walker:
     def run(self, tokens: list[Token]) -> None:
         heading: Token | None = None
         table_rows: list[list[str]] | None = None
+        row_lines: list[int] = []
         table_line: int | None = None
         in_cell = False
         for i, token in enumerate(tokens):
@@ -139,15 +156,17 @@ class _Walker:
             elif kind == "heading_close":
                 heading = None
             elif kind == "table_open":
-                table_rows, table_line = [], self.line(token)
+                table_rows, table_line, row_lines = [], self.line(token), []
             elif kind == "table_close":
                 assert table_rows is not None and table_line is not None
+                rows = tuple(tuple(r) for r in table_rows)
                 self.doc.tables.append(
-                    MdTable(table_line, "pipe", tuple(tuple(r) for r in table_rows))
+                    MdTable(table_line, "pipe", rows, grid=rows, row_lines=tuple(row_lines))
                 )
                 table_rows = None
             elif kind == "tr_open" and table_rows is not None:
                 table_rows.append([])
+                row_lines.append(self.line(token) or table_line or 0)
             elif kind in ("th_open", "td_open"):
                 in_cell = True
             elif kind in ("th_close", "td_close"):
@@ -162,7 +181,8 @@ class _Walker:
                     table_rows[-1].append(normalize(text))
             elif kind in ("fence", "code_block"):
                 line = self.line(token) or 0
-                self.doc.code_blocks.append(MdCode(line, token.content, token.info.strip()))
+                first = line + 1 if kind == "fence" else line
+                self.doc.code_blocks.append(MdCode(line, token.content, token.info.strip(), first))
                 self.doc.segments.append(Segment(token.content, CODE, line))
             elif kind == "html_block":
                 self.html_block(token)
@@ -238,9 +258,28 @@ class _Walker:
                     for tr in element.find_all("tr")
                     if tr.find_parent("table") is element
                 )
-                self.doc.tables.append(MdTable(line_of(element), "html", rows))
+                own_rows = [
+                    tr for tr in element.find_all("tr") if tr.find_parent("table") is element
+                ]
+                caption = next(
+                    (c for c in element.find_all("caption") if c.find_parent("table") is element),
+                    None,
+                )
+                self.doc.tables.append(
+                    MdTable(
+                        line_of(element),
+                        "html",
+                        rows,
+                        grid=tuple(tuple(r) for r in html_grid(element)),
+                        row_lines=tuple(line_of(tr) for tr in own_rows),
+                        cell_lines=tuple(tuple(r) for r in html_grid_lines(element, line_of)),
+                        caption=normalize(caption.get_text()) if caption is not None else "",
+                    )
+                )
             elif name == "pre":
-                self.doc.code_blocks.append(MdCode(line_of(element), element.get_text(), ""))
+                self.doc.code_blocks.append(
+                    MdCode(line_of(element), element.get_text(), "", line_of(element))
+                )
             elif name == "img":
                 self.doc.images.append(
                     MdImage(line_of(element), element.get("src", ""), element.get("alt", ""))

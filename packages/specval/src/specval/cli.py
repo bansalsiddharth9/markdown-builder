@@ -15,6 +15,8 @@ import typer
 from common.manifest import Manifest, ManifestError, read_manifest
 
 from specval import __version__, deps, runner
+from specval.approve import ApproveError
+from specval.approve import approve as approve_doc
 from specval.config import ConfigError, load_acceptance, load_config
 from specval.report import write_json, write_markdown, write_summary
 from specval.runlog import run_logging, run_timestamp
@@ -110,8 +112,12 @@ def run(
         )
         log.debug("config: %s", cfg)
         log.info("tool versions: %s", deps.tool_versions())
+        known = {e.id for e in manifest.entries}
+        for q in questions:
+            if q.doc not in known:
+                log.warning("acceptance question %r names unknown document %r", q.question, q.doc)
         for entry in entries:
-            report = runner.validate_document(entry, output, cfg, now)
+            report = runner.validate_document(entry, output, cfg, now, questions=questions)
             reports.append(report)
             write_json(report, validation)
             write_markdown(report, validation)
@@ -162,8 +168,12 @@ def approve(
     manifest = _read_manifest(output)
     if manifest.get(doc_id) is None:
         raise _fail_config(f"{doc_id!r}: not in {output / 'manifest.json'}")
-    typer.echo("error: approve is not implemented yet (build phase 6)", err=True)
-    raise typer.Exit(EXIT_FAILED)
+    try:
+        message = approve_doc(doc_id, output, validation, override=override, by=by)
+    except ApproveError as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(EXIT_FAILED) from exc
+    typer.echo(message)
 
 
 def main() -> None:

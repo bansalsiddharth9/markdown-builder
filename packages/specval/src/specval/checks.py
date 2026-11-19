@@ -21,7 +21,7 @@ from urllib.parse import unquote, urlsplit
 from common.frontmatter import FrontMatter
 from common.manifest import ManifestEntry
 
-from specval.config import SpecvalConfig
+from specval.config import AcceptanceQuestion, SpecvalConfig
 from specval.markdown import MarkdownDoc
 from specval.model import FAIL, NOT_APPLICABLE, PASS, WARN, CheckResult, Finding, status_from
 from specval.numbering import label, section_number, sequence_problems
@@ -44,6 +44,7 @@ class Document:
     reference: Reference | None
     conversion: dict[str, Any] = field(default_factory=dict)
     source_path: Path | None = None
+    questions: list[AcceptanceQuestion] = field(default_factory=list)
 
     @property
     def from_docling(self) -> bool:

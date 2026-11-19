@@ -10,13 +10,14 @@ from dataclasses import asdict, dataclass, field
 from typing import Any
 
 PASS, WARN, FAIL, NOT_APPLICABLE = "pass", "warn", "fail", "not_applicable"
+INFO = "info"  # a finding listed for reference that does not change the status
 NOT_RUN = "not_run"  # checks built in a later phase
 STATUS_ORDER = {FAIL: 0, WARN: 1, PASS: 2, NOT_APPLICABLE: 3, NOT_RUN: 4}
 
 
 @dataclass
 class Finding:
-    severity: str  # fail | warn
+    severity: str  # fail | warn | info
     message: str
     md_line: int | None = None  # 1-based line in <id>.md (front matter included)
     source_loc: str | None = None  # e.g. "page 3", "<h2> in section '1 Scope'"

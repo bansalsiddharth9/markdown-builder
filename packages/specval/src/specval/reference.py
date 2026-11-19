@@ -24,6 +24,7 @@ from pathlib import Path
 
 from bs4 import BeautifulSoup, Tag
 
+from specval.tablecheck import html_grid
 from specval.text import (
     CODE,
     HEADING_TAGS,
@@ -48,8 +49,9 @@ class RefHeading:
 @dataclass(frozen=True)
 class RefTable:
     loc: str
-    rows: tuple[tuple[str, ...], ...]
+    rows: tuple[tuple[str, ...], ...]  # distinct cells per row (V1 keys)
     page: int | None = None
+    grid: tuple[tuple[str, ...], ...] = ()  # spans expanded (V5)
 
 
 @dataclass(frozen=True)
@@ -145,7 +147,8 @@ def from_html(
                 for tr in element.find_all("tr")
                 if tr.find_parent("table") is element
             )
-            ref.tables.append(RefTable(loc(element), rows))
+            grid = tuple(tuple(r) for r in html_grid(element))
+            ref.tables.append(RefTable(loc(element), rows, grid=grid))
         elif name == "pre":
             ref.code_blocks.append(RefCode(loc(element), element.get_text()))
         elif name == "img" or (name == "svg" and element.find_parent("svg") is None):
@@ -243,26 +246,35 @@ def from_docx(path: Path) -> Reference:
         if text.strip():
             ref.segments.append(Segment(text, TABLE if in_table else TEXT, None, paragraph_loc()))
 
+    def cell_text(tc) -> str:
+        """Paragraphs (also of nested tables) joined by a space."""
+        return normalize(" ".join(_w_text(p) for p in tc.iter(f"{W}p")))
+
     def visit_table(table: Table) -> None:
         end_code()
         state["table"] += 1
         loc = f"table {state['table']} in section '{state['section']}'"
+        index = len(ref.tables)
+        ref.tables.append(RefTable(loc, ()))  # filled below; nested tables come after it
         rows = []
+        grid = []
         for row in table.rows:
             cells = []
             seen = set()
+            # row.cells repeats a merged cell in every grid column it covers
+            grid.append(tuple(cell_text(cell._tc) for cell in row.cells))
             for cell in row.cells:
-                if id(cell._tc) in seen:  # a merged cell is returned once per grid column
+                if id(cell._tc) in seen:
                     continue
                 seen.add(id(cell._tc))
-                cells.append(normalize(_w_text(cell._tc)))
+                cells.append(cell_text(cell._tc))
                 for block in cell.iter_inner_content():
                     if isinstance(block, Table):
                         visit_table(block)
                     else:
                         visit_paragraph(block, in_table=True)
             rows.append(tuple(cells))
-        ref.tables.append(RefTable(loc, tuple(rows)))
+        ref.tables[index] = RefTable(loc, tuple(rows), grid=tuple(grid))
 
     for block in document.iter_inner_content():
         if isinstance(block, Table):
@@ -375,7 +387,9 @@ def from_pdf(path: Path) -> Reference:
                 rows = tuple(
                     tuple(normalize(cell or "") for cell in row) for row in table.extract()
                 )
-                ref.tables.append(RefTable(f"page {number}, table {i}", rows, page=number))
+                ref.tables.append(
+                    RefTable(f"page {number}, table {i}", rows, page=number, grid=rows)
+                )
     return ref
 
 

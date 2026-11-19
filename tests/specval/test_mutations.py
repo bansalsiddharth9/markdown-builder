@@ -66,14 +66,20 @@ def summary(report: DocReport) -> str:
 # ------------------------------------------------------------ baseline
 
 
-@pytest.mark.parametrize("kind", KINDS)
+@pytest.mark.parametrize("kind", ["html", "docx"])
 def test_unmodified_conversion_passes(out: Path, kind: str) -> None:
     report = validate(out, DOC_IDS[kind])
     assert report.overall == "pass", summary(report)
+    assert {c.status for c in report.checks} <= {"pass", "not_applicable"}
+
+
+def test_unmodified_pdf_fails_only_on_lost_code_line_breaks(out: Path) -> None:
+    """Known Docling limitation: line breaks in code are lost, so the WebVTT
+    example's timing lines carry the cue text. Everything else passes."""
+    report = validate(out, DOC_IDS["pdf"])
     statuses = {c.id: c.status for c in report.checks}
-    assert statuses["V1"] == statuses["V4"] == statuses["V7"] == "pass"
-    assert statuses["V2"] == "pass"
-    assert statuses["V3"] == "not_run"  # phase 6
+    assert statuses.pop("V6") == "fail", summary(report)
+    assert set(statuses.values()) <= {"pass", "not_applicable"}, summary(report)
 
 
 def test_saved_page_reports_its_missing_image(out: Path) -> None:

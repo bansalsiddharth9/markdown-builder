@@ -31,6 +31,8 @@ from specconv.deps import find_pandoc, pandoc_version
 
 PANDOC_TIMEOUT_S = 900  # design: 15 minutes per document
 ANCHORS_FILTER = Path(__file__).resolve().parent.parent / "filters" / "anchors.lua"
+# Edge whitespace of inline code and emphasis moved outside (deviations Q22).
+SPACING_FILTER = Path(__file__).resolve().parent.parent / "filters" / "spacing.lua"
 
 
 class PandocConverter:
@@ -65,7 +67,8 @@ class PandocConverter:
             "to": "gfm",
             "wrap": "none",
             "sandbox": True,
-            "lua_filter": ANCHORS_FILTER.name,
+            "lua_filter": [ANCHORS_FILTER.name, SPACING_FILTER.name],
+            "preserve_tabs": True,
             "anchor_headings": self.anchor_headings,
         }
         if self.from_format == "docx":
@@ -87,8 +90,11 @@ class PandocConverter:
             "-t",
             "gfm",
             "--wrap=none",
+            # Tabs in code stay tabs (Pandoc's default turns them into spaces; Q21).
+            "--preserve-tabs",
             f"--metadata=anchor-headings:{self.anchor_headings}",
             f"--lua-filter={ANCHORS_FILTER}",
+            f"--lua-filter={SPACING_FILTER}",
         ]
         if self.from_format == "docx":
             cmd.append(f"--extract-media={MEDIA_DIR}")

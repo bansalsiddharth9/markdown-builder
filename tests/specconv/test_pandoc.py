@@ -7,7 +7,7 @@ import re
 from pathlib import Path
 
 import pytest
-from specconv.converters.pandoc import ANCHORS_FILTER, PandocConverter
+from specconv.converters.pandoc import ANCHORS_FILTER, SPACING_FILTER, PandocConverter
 from specconv.htmlprep import prepare_html
 from specconv.postprocess import postprocess
 
@@ -120,7 +120,8 @@ def test_options_and_command() -> None:
         "to": "gfm",
         "wrap": "none",
         "sandbox": True,
-        "lua_filter": "anchors.lua",
+        "lua_filter": ["anchors.lua", "spacing.lua"],
+        "preserve_tabs": True,
         "anchor_headings": "targeted",
         "track_changes": "accept",
         "extract_media": "media",
@@ -134,8 +135,10 @@ def test_options_and_command() -> None:
         "-t",
         "gfm",
         "--wrap=none",
+        "--preserve-tabs",
         "--metadata=anchor-headings:targeted",
         f"--lua-filter={ANCHORS_FILTER}",
+        f"--lua-filter={SPACING_FILTER}",
         "--extract-media=media",
     ]
     html = PandocConverter("html").command(Path("/x/in.html"))
