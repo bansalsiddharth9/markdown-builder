@@ -1,0 +1,6 @@
+# Acceptance questions (check V9): each expected snippet must appear in the named document.
+# Example:
+#   - doc: cta-608-e
+#     question: Maximum rows in roll-up mode?
+#     expect: "4 rows"
+questions: []

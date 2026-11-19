@@ -1,0 +1,11 @@
+.venv/
+.playwright/
+__pycache__/
+*.pyc
+.pytest_cache/
+work/
+output/
+validation/
+data/
+input/*
+!input/.gitkeep

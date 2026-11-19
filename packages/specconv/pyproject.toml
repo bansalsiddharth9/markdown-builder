@@ -1,0 +1,35 @@
+[project]
+name = "specconv"
+version = "0.1.0"
+description = "Convert caption specs (PDF, HTML, DOCX, web pages) to Markdown"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "beautifulsoup4==4.15.0",
+    "common",
+    "docling==2.151.0",
+    "httpx==0.28.1",
+    "lxml==6.1.3",
+    "playwright==1.65.2",
+    "pypdf==7.1.1",
+    "pyyaml==6.0.3",
+    "torch==2.15.0",
+    "torchvision==0.29.2",
+    "typer==0.27.3",
+]
+
+[project.scripts]
+specconv = "specconv.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/specconv"]
+
+[tool.uv.sources]
+common = { workspace = true }
+# CPU-only PyTorch (pulled in by Docling): deterministic, no CUDA download,
+# and the host GPU (GTX 1080) is not supported by current CUDA builds.
+torch = { index = "pytorch-cpu" }
+torchvision = { index = "pytorch-cpu" }

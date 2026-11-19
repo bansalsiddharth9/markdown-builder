@@ -1,0 +1,6 @@
+# specval settings (design: Configuration files). Unknown keys are an error.
+text_coverage: {fail_below: 0.98, warn_below: 0.995, min_sentence_chars: 20, fuzzy_ratio: 95}
+pdf_table_count_tolerance: 1
+always_review_table_patterns: [code, "character set", command, control]
+sample_pages: {count: 3, seed: 42}
+token_families: {}   # optional extra regex families, merged with the defaults

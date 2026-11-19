@@ -1,0 +1,11 @@
+# specconv settings (design: Configuration files). Unknown keys are an error.
+pdf:
+  min_chars_per_page: 50      # a page "has a text layer" at this many non-whitespace chars
+  min_text_page_ratio: 0.7    # below this share of text pages: no_text_layer, not converted
+html:
+  strip_tags: [script, style, noscript]
+fetch:
+  timeout_s: 30
+  retries: 3
+  user_agent: "specconv/1.0"
+  browsers_path: ../.playwright   # Playwright Chromium, relative to this file

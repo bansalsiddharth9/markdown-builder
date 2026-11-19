@@ -1,0 +1,9 @@
+# Web pages to fetch and convert. id names the output folder and must be unique.
+#   render: static (HTTP client) | browser (Playwright, for JavaScript-built pages)
+#   clean:  none (default, use for spec pages) | main-content (strip nav/header/footer/aside)
+#   drop_selectors: extra CSS selectors to remove, only with clean: main-content
+sources:
+  - id: ttml2
+    url: https://www.w3.org/TR/ttml2/
+    render: static
+    clean: none
