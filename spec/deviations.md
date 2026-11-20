@@ -285,6 +285,12 @@ Host sizing (design open question): one PDF worker needs about 6 GB of memory; t
 | SEC6 | Per-client limits behind the reverse proxy | `specweb serve --forwarded-allow-ips` (default 127.0.0.1; `*` in Docker, where only the proxy can connect) so the client address comes from `X-Forwarded-For` | Otherwise every client would look like the proxy. | implemented |
 | SEC7 | Dockerfile and Compose with Caddy | `python:3.12.13-slim-bookworm`, Pandoc 3.14 `.deb`, uv 0.13.9 with `uv sync --frozen`, Chromium via `playwright install --with-deps`, the pinned models downloaded at build time, non-root user; Compose: `web`, `worker` (`mem_limit: 8g`), `proxy` (`caddy:2.10.2`, `tls internal`, 2.1 GB request limit) sharing the `data` volume; `deploy/specweb.yaml` | The image is self-contained, so conversion needs no network at run time. | implemented |
 
+## After the build (2026-11-20)
+
+| # | Design | Build | Why | Status |
+| --- | --- | --- | --- | --- |
+| HP1 | Converter and validator read HTML with different libraries | The converter's HTML preparation reads pages with **lxml** (was Python's `html.parser`); the validator reads the source with **html5lib 1.1** (MIT; was lxml), which implements the browser reading rules exactly. Both now apply the HTML rules for unclosed elements; they still use different libraries. For a page that declares no encoding, the validator reads valid UTF-8 as UTF-8 before html5lib's windows-1252 fallback, as browsers do. V6 recognizes "the source has the same problem" without comparing line numbers (browsers drop the line break right after `<pre>`). `RECIPE_VERSION` 9 | `input/SCC` ("Closed Captions and the Scenarist Closed Caption Format", old HTML with unclosed `<td>`/`<th>`): `html.parser` nested every cell in the previous one, so 3 of 5 tables reached Pandoc as nested cells and came out as one value per line; V1, V4 and V5 caught it. Re-run: TTML2 Markdown identical, SAMI loses one hidden `<![CDATA[…]]>` notice a browser does not show; SAMI and TTML2 reports unchanged. html5lib adds about 1.5 s for the 1.9 MB TTML2 page | implemented |
+
 ## Future scope (to be checked later)
 
 | # | Topic | Detail | Possible approach |

@@ -3,6 +3,7 @@ fetching; decisions I1, I2, S1, S2)."""
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pytest
@@ -179,7 +180,7 @@ def test_single_cell_table_ids_kept_and_no_caption(tmp_path: Path) -> None:
     result = prep(html, tmp_path)
     assert '<p><a id="t"></a><a id="r"></a><a id="c"></a></p>Note <i>here</i>' in result.html
     plain = prep("<table><tr><td>Just text</td></tr></table>", tmp_path / "b")
-    assert plain.html == "Just text"
+    assert "<body>Just text</body>" in plain.html  # lxml adds the page wrapper
 
 
 def test_tables_with_more_cells_kept_and_nested_box_unwrapped(tmp_path: Path) -> None:
@@ -335,3 +336,36 @@ def test_template_removed_with_default_strip_tags(tmp_path: Path) -> None:
         html.encode(), strip_tags=HtmlConfig().strip_tags, media_dir=tmp_path / "m"
     )
     assert "AI Assistant" not in result.html and result.removed == {"template": 1}
+
+
+# ------------------------------------------------------- old-style HTML
+
+# HTML lets a new cell close the previous one; older pages rely on it
+# (input/SCC, "Closed Captions and the Scenarist Closed Caption Format").
+UNCLOSED = (
+    "<ol><li>Here is a table:\n<p><table border=1>"
+    "<tr><th align=right>Row:<th>1<th>2</tr>\n"
+    "<tr><td align=right>High Byte:<td>91<td>92</tr>\n"
+    "</table></p>\n<li>next</ol>"
+)
+
+
+def test_unclosed_cells_read_by_browser_rules(tmp_path: Path) -> None:
+    result = prep(UNCLOSED, tmp_path)
+    assert "<td>91</td><td>92</td>" in result.html  # not nested in each other
+    assert "<th>1</th><th>2</th>" in result.html
+
+
+def test_unclosed_cells_become_a_markdown_table(tmp_path: Path, monkeypatch) -> None:
+    from specconv import cli
+    from typer.testing import CliRunner
+
+    monkeypatch.chdir(tmp_path)
+    Path("input").mkdir()
+    Path("input/old.htm").write_text(UNCLOSED, encoding="utf-8")
+    result = CliRunner().invoke(
+        cli.app, ["convert", "--input", "input", "--output", "output", "--work", "work"]
+    )
+    assert result.exit_code == 0, result.output
+    markdown = Path("output/old/old.md").read_text(encoding="utf-8")
+    assert "| High Byte: | 91 | 92 |" in re.sub(" +", " ", markdown)

@@ -6,6 +6,7 @@ requires-python = ">=3.12,<3.13"
 dependencies = [
     "beautifulsoup4==4.15.0",
     "common",
+    "html5lib==1.1",
     "lxml==6.1.3",
     "markdown-it-py==4.3.0",
     "pdfplumber==0.11.10",

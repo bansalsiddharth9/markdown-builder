@@ -13,6 +13,7 @@ REQUIRED_PACKAGES = (
     "python-docx",
     "beautifulsoup4",
     "lxml",
+    "html5lib",
     "markdown-it-py",
     "rapidfuzz",
     "pymarkdownlnt",

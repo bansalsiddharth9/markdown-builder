@@ -44,6 +44,13 @@ def is_webvtt_block(text: str) -> bool:
     return stripped.startswith("WEBVTT") or ("-->" in text and not stripped.startswith("<"))
 
 
+def problem_key(message: str) -> str:
+    """A problem message without line numbers, to recognize the same problem in
+    the source's copy of a block even when it starts on another line (browsers
+    drop the line break right after <pre>)."""
+    return re.sub(r"\bline \d+", "line N", message)
+
+
 def xml_problems(text: str) -> list[tuple[int, str]]:
     """(line, message) for each parse error, lines 1-based within the block."""
     # Keep line numbers: the declaration and doctype become spaces (newlines kept).

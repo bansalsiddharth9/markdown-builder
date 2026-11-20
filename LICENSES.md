@@ -69,6 +69,7 @@ All packages installed in the project environment (direct and indirect), excludi
 | greenlet | 3.5.6 | MIT AND PSF-2.0 |
 | h11 | 0.16.0 | MIT |
 | hf-xet | 1.8.0 | Apache-2.0 |
+| html5lib | 1.1 | MIT |
 | httpcore | 1.0.9 | BSD-3-Clause |
 | httpx | 0.28.1 | BSD |
 | huey | 3.5.4 | MIT (from LICENSE) |
@@ -168,5 +169,6 @@ All packages installed in the project environment (direct and indirect), excludi
 | urllib3 | 2.8.0 | MIT |
 | uvicorn | 0.54.0 | BSD-3-Clause |
 | wcwidth | 0.9.4 | MIT |
+| webencodings | 0.6.1 | BSD |
 | websockets | 17.4 | BSD-3-Clause |
 | xlsxwriter | 3.3.1 | BSD-2-Clause |

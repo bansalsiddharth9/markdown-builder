@@ -1,6 +1,7 @@
 """Reference data from the saved source (design: Reference extraction).
 
-Different libraries than the converter: BeautifulSoup + lxml for HTML,
+Different libraries than the converter: BeautifulSoup + html5lib for HTML
+(the browser reading rules exactly; the converter uses lxml),
 python-docx (and its XML) for DOCX, pypdf and pdfplumber for PDF.
 
 - HTML: visible text after the converter's cleanup rules; h1-h6; <table>
@@ -109,6 +110,24 @@ def _main_content(soup: BeautifulSoup, drop_selectors: Iterable[str]) -> None:
                 element.decompose()
 
 
+_DECLARED_CHARSET = re.compile(rb"<meta[^>]+charset", re.I)
+
+
+def _decode_html(data: bytes, encoding: str | None) -> bytes | str:
+    """Bytes for html5lib, or text when the page is UTF-8 without saying so.
+
+    html5lib follows the HTML standard's last resort for pages that declare no
+    encoding (windows-1252); browsers first check whether the bytes are valid
+    UTF-8, and so does this. A given or declared encoding is left to html5lib.
+    """
+    if encoding is not None or _DECLARED_CHARSET.search(data[:4096]):
+        return data
+    try:
+        return data.decode("utf-8")
+    except UnicodeDecodeError:
+        return data
+
+
 def from_html(
     data: bytes,
     *,
@@ -117,7 +136,7 @@ def from_html(
     drop_selectors: Iterable[str] = (),
     encoding: str | None = None,
 ) -> Reference:
-    soup = BeautifulSoup(data, "lxml", from_encoding=encoding)
+    soup = BeautifulSoup(_decode_html(data, encoding), "html5lib", from_encoding=encoding)
     for tag in strip_tags:
         for element in soup.find_all(tag):
             element.decompose()

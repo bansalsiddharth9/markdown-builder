@@ -247,3 +247,31 @@ def test_running_headers_and_page_numbers_found() -> None:
     # page numbers follow the page; "Byte 1" repeats unchanged; "Table n" does neither
     assert removed == {"CEA-608-E", "Byte 1"} | {f"Page {n + 3}" for n in range(5)}
     assert furniture_lines(pages[:2]) == set()  # too few pages to tell
+
+
+# ----------------------------------------- reading HTML by browser rules
+
+
+def test_html_reference_uses_browser_rules() -> None:
+    # A browser shows text misplaced inside a table *before* the table
+    # (HTML "foster parenting"); lxml leaves it inside. The reference must
+    # read the page like a browser, and differently from the converter.
+    html = "<p>Intro text here.</p><table><tr><td>Cell text</td></tr>Stray words here.</table>"
+    texts = [s.text for s in from_html(html.encode()).segments]
+    assert texts.index("Stray words here.") < texts.index("Cell text")
+
+
+def test_html_reference_unclosed_cells() -> None:
+    html = "<table><tr><th>Row:<th>1<th>2</tr><tr><td>High Byte:<td>91<td>92</tr></table>"
+    (table,) = from_html(html.encode()).tables
+    assert table.rows == (("Row:", "1", "2"), ("High Byte:", "91", "92"))
+
+
+def test_html_reference_undeclared_utf8_page() -> None:
+    # No charset anywhere (input/SAMI); html5lib alone would fall back to
+    # windows-1252 and read "Café" as "CafÃ©". Valid UTF-8 is read as UTF-8,
+    # like current browsers do.
+    data = "<p>Café au lait, naïve.</p>".encode()
+    assert from_html(data).segments[0].text == "Café\u00a0au lait, naïve."
+    latin1 = "<p>Café au lait.</p>".encode("iso-8859-1")  # not valid UTF-8
+    assert from_html(latin1).segments[0].text == "Café au lait."

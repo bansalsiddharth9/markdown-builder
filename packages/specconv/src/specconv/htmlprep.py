@@ -39,9 +39,11 @@ spec/deviations.md. Steps, in order:
    images, and local paths outside the HTML file's folder, keep their
    original link and get a warning, so V7 still sees them.
 
-BeautifulSoup is used with Python's html.parser, which tokenizes without
-repairing the document structure, so apart from the changes above the HTML
-reaching Pandoc is what the author wrote. The result is always UTF-8.
+BeautifulSoup is used with lxml, which reads the page by the HTML rules a
+browser applies (a new <td> closes the previous one, and so on), so old pages
+that leave elements unclosed keep their tables. Apart from the changes above,
+the HTML reaching Pandoc is what a browser would show. The result is always
+UTF-8.
 """
 
 from __future__ import annotations
@@ -483,7 +485,7 @@ def prepare_html(
     their clean mode and drop_selectors, and the images fetch downloaded
     (image_key(URL) -> file).
     """
-    soup = BeautifulSoup(data, "html.parser", from_encoding=encoding)
+    soup = BeautifulSoup(data, "lxml", from_encoding=encoding)
     result = PreparedHtml(html="", original_encoding=soup.original_encoding)
 
     result.own_urls = find_own_urls(soup, known_urls)

@@ -57,7 +57,7 @@ from specconv.textlayer import FLAG_MIXED, PdfReadError, TextLayer, check_text_l
 
 log = logging.getLogger("specconv.pipeline")
 
-RECIPE_VERSION = 8  # bump when HTML preparation, filters or post-processing change
+RECIPE_VERSION = 9  # bump when HTML preparation, filters or post-processing change
 FAILED_STATUSES = frozenset({"failed", "no_text_layer"})
 SKIPPABLE_STATUSES = frozenset({"ok", "skipped_unchanged"})
 SUSPECT_EMPTY_CHARS = 500  # design: page that renders empty

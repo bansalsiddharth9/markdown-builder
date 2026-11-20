@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from specval.codecheck import code_differs, webvtt_problems, xml_problems
+from specval.codecheck import code_differs, problem_key, webvtt_problems, xml_problems
 
 from .conftest import DOC_IDS
 from .test_mutations import check, mutate, validate
@@ -97,3 +97,14 @@ def test_xml_block_detection() -> None:
     # a URL syntax with angle brackets is not XML (CEA-608-E page 41)
     assert not is_xml_block("<url>[attr1:val1][attr2:val2]...[checksum]")
     assert not is_xml_block("<http://advsponsor.net>[type:sponsor][0xEA77]")
+
+
+def test_same_source_problem_recognized_despite_line_shift() -> None:
+    # Browsers drop the line break right after <pre>, so the source's copy of
+    # a code block can start one line earlier than the Markdown's. The same
+    # XML problem must still count as "the source has the same problem".
+    src = "<SAMI>\n<STYLE>p {}\n</Style>\n</SAMI>"
+    (_, from_source), (_, from_markdown) = xml_problems(src)[0], xml_problems("\n" + src)[0]
+    assert from_source != from_markdown  # the messages name different lines
+    assert problem_key(from_source) == problem_key(from_markdown)
+    assert problem_key(from_source) != problem_key(xml_problems("<a><b></a>")[0][1])

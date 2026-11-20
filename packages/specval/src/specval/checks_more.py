@@ -13,6 +13,7 @@ from specval.codecheck import (
     code_differs,
     is_webvtt_block,
     is_xml_block,
+    problem_key,
     webvtt_problems,
     xml_problems,
 )
@@ -329,10 +330,12 @@ def check_v6(doc: Document, cfg: SpecvalConfig) -> CheckResult:
             webvtt_blocks += 1
             checks.append(("WebVTT", webvtt_problems))
         for label, run in checks:
-            in_source = {m for _, m in run(source_text)} if source_text is not None else set()
+            in_source = (
+                {problem_key(m) for _, m in run(source_text)} if source_text is not None else set()
+            )
             for k, message in run(text):
                 line = out.first_line + k - 1
-                same = message in in_source
+                same = problem_key(message) in in_source
                 findings.append(
                     Finding(
                         INFO if same else FAIL,
