@@ -1,3 +1,4 @@
+{% from "_macros.html" import pill %}
 <div id="jobs-table"
      {% if any_running %}hx-get="/jobs/table{% if status %}?status={{ status }}{% endif %}" hx-trigger="every 2s" hx-swap="outerHTML"{% endif %}>
 <table>
@@ -9,8 +10,8 @@
       <td><a href="/jobs/{{ job.id }}">{{ job.id }}</a></td>
       <td>{{ job.submitted_by or "" }}</td>
       <td>{{ job.documents | length }}</td>
-      <td><span class="status s-{{ job.status }}">{{ job.status }}</span></td>
-      <td>{% if job.overall %}<span class="status s-{{ job.overall }}">{{ job.overall }}</span>{% endif %}</td>
+      <td>{{ pill(job.status) }}</td>
+      <td>{% if job.overall %}{{ pill(job.overall) }}{% endif %}</td>
     </tr>
   {% else %}
     <tr><td colspan="6">No jobs yet.</td></tr>

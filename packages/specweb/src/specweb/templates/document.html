@@ -1,12 +1,14 @@
 {% extends "base.html" %}
+{% from "_macros.html" import pill %}
+{% set nav = "jobs" %}
 {% block title %}{{ doc.front_matter.title or doc_id }} · Spec converter{% endblock %}
 {% block content %}
 <p><a href="/jobs/{{ job_id }}">Job {{ job_id }}</a> › {{ doc_id }}</p>
 <h1>{{ doc.front_matter.title or doc.source_name }}</h1>
 <p class="meta">
   Source: {{ doc.source_name }} ({{ doc.source_type }}) ·
-  Conversion: <span class="status s-{{ doc.status }}">{{ doc.status }}</span>
-  {% if doc.validation %} · Validation: <span class="status s-{{ doc.validation.overall }}">{{ doc.validation.overall }}</span>{% endif %}
+  Conversion: {{ pill(doc.status) }}
+  {% if doc.validation %} · Validation: {{ pill(doc.validation.overall) }}{% endif %}
   {% if doc.approved_by or doc.approved_at %} · <strong>Approved{% if doc.approved_by %} by {{ doc.approved_by }}{% endif %}</strong> {{ doc.approved_at }}{% endif %}
 </p>
 {% if message %}<p class="{{ 'notice' if message == 'approved' else 'error' }}" role="status">{{ message }}</p>{% endif %}

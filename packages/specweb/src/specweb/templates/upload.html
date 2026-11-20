@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% set nav = "upload" %}
 {% block title %}Upload · Spec converter{% endblock %}
 {% block content %}
 <h1>Convert specifications</h1>
@@ -9,7 +10,7 @@ Converted files are for <strong>internal reference only</strong>.</p>
   <label>Files (PDF, HTML, DOCX)
     <input type="file" name="files" multiple accept=".pdf,.html,.htm,.docx">
   </label>
-  <label>Web pages, one URL per line; add <code>browser</code> after a URL for pages built by JavaScript
+  <label><span>Web pages, one URL per line; add <code>browser</code> after a URL for pages built by JavaScript</span>
     <textarea name="urls_text" rows="4" placeholder="https://www.w3.org/TR/ttml2/&#10;https://example.org/captions browser"></textarea>
   </label>
   <label>Also split into one file per heading of level (optional)

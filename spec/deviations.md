@@ -271,6 +271,7 @@ Host sizing (design open question): one PDF worker needs about 6 GB of memory; t
 | WB13 | Download "a zip with media" | The zip holds `<doc_id>/<doc_id>.md`, `media/`, `sections/` (if split) and the validation report (`validation.json`, `validation.md`); the source is a separate download | Sources can be large and are available on their own. | implemented |
 | WB14 | DOCX sources shown as Pandoc HTML (open question W-b) | `pandoc --sandbox -f docx -t html`, sanitized with nh3, display only; plus a download link | W-b's proposed default: rendering a preview is not conversion logic. | decided |
 | WB15 | Review queue items link to the Markdown line and source page | Markdown lines link to the Raw tab (`#L<n>`, each line has an anchor); PDF pages link to the source with `#page=<n>` (opened by the browser's PDF viewer); other locations are shown as text | HTML and DOCX locations are element paths, not pages. | implemented |
+| WB16 | Plain, accessible CSS (UI technology) | Dark theme only, with the navigation (Upload, Jobs, Library) in a left sidebar that folds into a top bar below 800 px, and statuses shown as coloured pills; still one hand-written stylesheet, no build step, no web fonts. The original-source viewer and diagram images keep a white background | User request on 2026-11-20, following a reference screenshot. Specs and diagrams are drawn for white paper and are unreadable on black. | implemented |
 
 ## Hardening and deployment (phase 11)
 

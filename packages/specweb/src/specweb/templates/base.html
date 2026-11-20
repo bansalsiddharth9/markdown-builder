@@ -3,27 +3,41 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
   <title>{% block title %}Spec converter{% endblock %}</title>
   <meta name="htmx-config" content='{"includeIndicatorStyles": false}'>
   <link rel="stylesheet" href="/static/style.css">
   <script src="/static/htmx.min.js"></script>
 </head>
 <body>
-  <header class="top">
-    <a class="brand" href="/">Spec converter</a>
-    <nav>
-      <a href="/">Upload</a>
-      <a href="/jobs">Jobs</a>
-      <a href="/library">Library</a>
-      {% block nav_extra %}{% endblock %}
-    </nav>
-  </header>
-  <main>
-    {% block content %}{% endblock %}
-  </main>
-  <footer class="note">
-    No accounts: everyone on this network can see and use every job.
-    Converted files are for internal reference only; many standards are licensed documents.
-  </footer>
+  {%- set nav = nav | default("") %}
+  <aside class="sidebar">
+    <a class="brand" href="/"><span class="mark" aria-hidden="true">S</span>Spec converter</a>
+    <div>
+      <div class="nav-label">Workspace</div>
+      <nav aria-label="Main">
+        <a href="/"{% if nav == "upload" %} aria-current="page"{% endif %}>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 15V4"/><path d="m7 9 5-5 5 5"/><path d="M4 15v4a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-4"/></svg>
+          Upload</a>
+        <a href="/jobs"{% if nav == "jobs" %} aria-current="page"{% endif %}>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 6h11"/><path d="M9 12h11"/><path d="M9 18h11"/><circle cx="4.5" cy="6" r="1"/><circle cx="4.5" cy="12" r="1"/><circle cx="4.5" cy="18" r="1"/></svg>
+          Jobs</a>
+        <a href="/library"{% if nav == "library" %} aria-current="page"{% endif %}>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 19V5a2 2 0 0 1 2-2h13v15H6a2 2 0 0 0-2 2v0a2 2 0 0 0 2 2h13"/><path d="M8 7h7"/></svg>
+          Library</a>
+        {% block nav_extra %}{% endblock %}
+      </nav>
+    </div>
+  </aside>
+  <div class="page">
+    <main>
+      {% block content %}{% endblock %}
+    </main>
+    <footer class="note">
+      No accounts: everyone on this network can see and use every job.
+      Converted files are for internal reference only; many standards are licensed documents.
+      <p class="credit">Crafted by <strong>Siddharth Bansal</strong> · Because even AI gives up on page 247 of a PDF.</p>
+    </footer>
+  </div>
 </body>
 </html>

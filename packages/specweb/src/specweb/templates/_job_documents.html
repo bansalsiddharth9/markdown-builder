@@ -1,6 +1,7 @@
+{% from "_macros.html" import pill %}
 <div id="job-documents"
      {% if job.status in running or job.status == "queued" %}hx-get="/jobs/{{ job.id }}/documents" hx-trigger="every 2s" hx-swap="outerHTML"{% endif %}>
-<p>Status: <span class="status s-{{ job.status }}">{{ job.status }}</span></p>
+<p>Status: {{ pill(job.status) }}</p>
 {% if job.error %}<p class="error" role="alert">{{ job.error }}</p>{% endif %}
 <table>
   <thead><tr><th>Source</th><th>Type</th><th>Document</th><th>Conversion</th><th>Validation</th></tr></thead>
@@ -10,8 +11,8 @@
       <td>{{ doc.source_name }}{% if doc.render == "browser" %} (browser){% endif %}</td>
       <td>{{ doc.source_type }}</td>
       <td>{% if doc.doc_id and doc.status in ("ok", "skipped_unchanged") %}<a href="/documents/{{ job.id }}/{{ doc.doc_id }}">{{ doc.doc_id }}</a>{% elif doc.doc_id %}{{ doc.doc_id }}{% endif %}{% if doc.approved_at %} ✓ approved{% endif %}</td>
-      <td><span class="status s-{{ doc.status }}">{{ doc.status }}</span>{% if doc.error %}<br><small>{{ doc.error }}</small>{% endif %}</td>
-      <td>{% if doc.validation_status %}<span class="status s-{{ doc.validation_status }}">{{ doc.validation_status }}</span>{% endif %}</td>
+      <td>{{ pill(doc.status) }}{% if doc.error %}<br><small>{{ doc.error }}</small>{% endif %}</td>
+      <td>{% if doc.validation_status %}{{ pill(doc.validation_status) }}{% endif %}</td>
     </tr>
   {% endfor %}
   </tbody>
