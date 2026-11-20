@@ -173,3 +173,18 @@ ol.queue blockquote { margin: .35rem 0 0 1.5rem; color: var(--muted); }
   footer.note { padding: 1rem; }
   .split { grid-template-columns: 1fr; }
 }
+
+/* ------------------------------------------------------- delete a job */
+.danger-zone { margin-top: 2rem; }
+button.danger { background: #b4402e; }
+button.danger:hover { background: #c94d39; }
+button.secondary { background: var(--panel-2); border-color: var(--line-strong); }
+button.secondary:hover { background: #26262b; }
+dialog {
+  max-width: 28rem; width: calc(100% - 2rem); padding: 1.25rem 1.5rem;
+  color: var(--fg); background: var(--panel); border: 1px solid var(--line-strong); border-radius: 10px;
+}
+dialog::backdrop { background: rgba(0, 0, 0, .6); }
+dialog h2 { font-size: 1.1rem; margin: 0 0 .5rem; }
+dialog p { color: #c4c4ca; margin: 0 0 1.25rem; }
+dialog .actions { display: flex; gap: .75rem; justify-content: flex-end; }

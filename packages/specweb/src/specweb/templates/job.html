@@ -4,5 +4,23 @@
 {% block content %}
 <h1>Job {{ job.id }}</h1>
 <p>Submitted {{ job.created_at }}{% if job.submitted_by %} by {{ job.submitted_by }}{% endif %}{% if job.options.split %} · split at level {{ job.options.split }}{% endif %}</p>
+{% if message %}<p class="error" role="status">{{ message }}</p>{% endif %}
 {% include "_job_documents.html" %}
+{% if job.status not in running %}
+<div class="danger-zone">
+  <button type="button" class="danger" data-open-dialog="confirm-delete">Delete job</button>
+</div>
+<dialog id="confirm-delete" aria-labelledby="confirm-delete-title">
+  <form method="post" action="/jobs/{{ job.id }}/delete">
+    <h2 id="confirm-delete-title">Delete job {{ job.id }}?</h2>
+    <p>This deletes the uploaded files, the Markdown and the validation reports of this job.
+    It cannot be undone. Approved documents stay in the Library.</p>
+    <div class="actions">
+      <button type="submit" formmethod="dialog" formnovalidate class="secondary">Cancel</button>
+      <button type="submit" class="danger">Delete</button>
+    </div>
+  </form>
+</dialog>
+<script src="/static/dialog.js"></script>
+{% endif %}
 {% endblock %}

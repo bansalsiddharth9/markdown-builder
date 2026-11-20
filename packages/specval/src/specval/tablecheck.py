@@ -81,9 +81,19 @@ def _key(row: list[str]) -> str:
     return " | ".join(row)
 
 
+def _trimmed(row: list[str]) -> list[str]:
+    """The row without its empty cells at the end: a Markdown table pads a
+    short row with them, so they carry nothing. Empty cells before a cell
+    with text still count."""
+    row = [normalize(c) for c in row]
+    while row and not row[-1]:
+        row.pop()
+    return row
+
+
 def compare_grids(source: Grid, markdown: Grid) -> list[TableProblem]:
-    source = [[normalize(c) for c in row] for row in source]
-    markdown = [[normalize(c) for c in row] for row in markdown]
+    source = [_trimmed(row) for row in source]
+    markdown = [_trimmed(row) for row in markdown]
     offset = 0
     # Pandoc writes an empty header row for a table that has none.
     while markdown and not any(markdown[0]) and len(markdown) > len(source):

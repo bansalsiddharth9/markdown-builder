@@ -108,7 +108,13 @@ def get_job(request: Request, job_id: str) -> dict:
 
 @router.delete("/api/jobs/{job_id}", status_code=204)
 def delete_job(request: Request, job_id: str) -> Response:
-    cfg = config(request)
+    remove_job(config(request), job_id)
+    return Response(status_code=204)
+
+
+def remove_job(cfg: WebConfig, job_id: str) -> None:
+    """Delete a job and its folder: 404 if unknown, 409 while it runs.
+    Approved documents stay in the library."""
     try:
         job_folder(cfg, job_id)
     except JobError as exc:
@@ -124,7 +130,6 @@ def delete_job(request: Request, job_id: str) -> Response:
         session.delete(job)
         session.commit()
     delete_job_files(cfg, job_id)
-    return Response(status_code=204)
 
 
 @router.get("/healthz")

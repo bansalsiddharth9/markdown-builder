@@ -152,3 +152,56 @@ def test_run_step_runs_subprocess_with_timeout(tmp_path: Path) -> None:
     assert code == 0 and "hello" in log.read_text()
     with pytest.raises(worker.StepTimeout):
         worker.run_step_command([sys.executable, "-c", "import time; time.sleep(5)"], 0.5, log)
+
+
+def _set_status(tmp_path: Path, job_id: str, status: str) -> None:
+    from specweb.db import Job, sessions
+
+    with sessions(tmp_path / "data")() as session:
+        session.get(Job, job_id).status = status
+        session.commit()
+
+
+def test_job_page_has_delete_button(client) -> None:
+    """Design, Job detail: 'delete the job'. The button is visible at once;
+    it opens a confirmation dialog, and only the dialog's button deletes."""
+    job = upload(client, files=[("a.pdf", PDF)]).json()
+    page = client.get(f"/jobs/{job['id']}").text
+    assert "<details" not in page
+    assert '<button type="button" class="danger" data-open-dialog="confirm-delete">' in page
+    dialog = page[page.index('<dialog id="confirm-delete"') : page.index("</dialog>")]
+    assert f'<form method="post" action="/jobs/{job["id"]}/delete">' in dialog
+    assert "Approved documents stay in the Library" in dialog
+    assert 'formmethod="dialog"' in dialog  # Cancel closes it without a request
+    assert '<script src="/static/dialog.js"></script>' in page
+
+
+def test_dialog_script_served(client) -> None:
+    """Our own file, so the CSP (script-src 'self') needs no change."""
+    script = client.get("/static/dialog.js")
+    assert script.status_code == 200
+    assert "showModal" in script.text and "data-open-dialog" in script.text
+
+
+def test_delete_button_removes_job_and_files(client, tmp_path: Path) -> None:
+    job = upload(client, files=[("a.pdf", PDF)]).json()
+    response = client.post(f"/jobs/{job['id']}/delete", follow_redirects=False)
+    assert response.status_code == 303
+    assert response.headers["location"].startswith("/jobs?message=")
+    assert not (tmp_path / "data/jobs" / job["id"]).exists()
+    assert client.get(f"/api/jobs/{job['id']}").status_code == 404
+    jobs_page = client.get(response.headers["location"]).text
+    assert f"Job {job['id']} deleted" in jobs_page
+
+
+def test_running_job_cannot_be_deleted(client, tmp_path: Path) -> None:
+    job = upload(client, files=[("a.pdf", PDF)]).json()
+    _set_status(tmp_path, job["id"], "converting")
+    assert 'action="/jobs/' + job["id"] + '/delete"' not in client.get(f"/jobs/{job['id']}").text
+    response = client.post(f"/jobs/{job['id']}/delete")  # follows the redirect
+    assert "delete it when it is done" in response.text
+    assert (tmp_path / "data/jobs" / job["id"]).is_dir()
+
+
+def test_delete_unknown_job_is_404(client) -> None:
+    assert client.post("/jobs/000000000000/delete").status_code == 404

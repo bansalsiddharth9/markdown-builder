@@ -3,6 +3,7 @@
 {% block title %}Jobs · Spec converter{% endblock %}
 {% block content %}
 <h1>Jobs</h1>
+{% if message %}<p class="notice" role="status">{{ message }}</p>{% endif %}
 <p class="meta">Disk: {{ disk.data_mb }} MB used by jobs and the library, {{ disk.free_mb }} MB free. Jobs are deleted automatically after a while; approved documents stay in the library.</p>
 <form method="get" action="/jobs" class="filter">
   <label>Status

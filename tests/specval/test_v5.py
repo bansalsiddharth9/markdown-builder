@@ -126,3 +126,28 @@ def test_pdf_cells_compared_like_v3() -> None:
     assert pdf_cells_agree("Mnemonic1", "Mnemonic 1")
     assert pdf_cells_agree("“G”", '"G"') and pdf_cells_agree("—", "-")
     assert not pdf_cells_agree("MPA4", "MPA")
+
+
+def test_padded_short_row_is_not_a_difference() -> None:
+    """Markdown rows all have the same number of cells: Pandoc fills a short
+    source row with empty cells at the end. That is not a difference."""
+    src = [["Code", "A", "B"], ["Low Byte by Column:"], ["40", "41", "42"]]
+    md = [["Code", "A", "B"], ["Low Byte by Column:", "", ""], ["40", "41", "42"]]
+    assert compare_grids(src, md) == []
+
+
+def test_empty_end_cells_on_both_sides_match() -> None:
+    src = [["A", "B", "C", "D"], ["1", "2", "", ""]]
+    md = [["A", "B", "C", "D"], ["1", "2", "", ""]]
+    assert compare_grids(src, md) == []
+
+
+def test_lost_last_cell_still_reported() -> None:
+    """The source's last cell has text, the Markdown's is empty: a loss."""
+    problems = compare_grids([["A", "B", "C"], ["1", "2", "3"]], [["A", "B", "C"], ["1", "2", ""]])
+    assert [(p.kind, p.row) for p in problems] == [("columns", 2)]
+
+
+def test_empty_cell_in_the_middle_still_counts() -> None:
+    problems = compare_grids([["A", "B", "C"], ["1", "2", "3"]], [["A", "B", "C"], ["1", "", "3"]])
+    assert [(p.kind, p.row, p.col) for p in problems] == [("cell", 2, 2)]

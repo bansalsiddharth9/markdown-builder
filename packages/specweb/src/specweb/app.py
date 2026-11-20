@@ -7,6 +7,7 @@ its rows are polled every 2 seconds. No JavaScript build step.
 from __future__ import annotations
 
 from typing import Annotated
+from urllib.parse import quote
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -75,17 +76,33 @@ def create_app(cfg: WebConfig | None = None) -> FastAPI:
         return RedirectResponse(f"/jobs/{job.id}", status_code=303)
 
     @app.get("/jobs", response_class=HTMLResponse)
-    def jobs_page(request: Request, status: str | None = None) -> HTMLResponse:
-        return templates.TemplateResponse(request, "jobs.html", _jobs_context(cfg, status))
+    def jobs_page(
+        request: Request, status: str | None = None, message: str | None = None
+    ) -> HTMLResponse:
+        context = {**_jobs_context(cfg, status), "message": message}
+        return templates.TemplateResponse(request, "jobs.html", context)
 
     @app.get("/jobs/table", response_class=HTMLResponse)
     def jobs_table(request: Request, status: str | None = None) -> HTMLResponse:
         return templates.TemplateResponse(request, "_jobs_table.html", _jobs_context(cfg, status))
 
     @app.get("/jobs/{job_id}", response_class=HTMLResponse)
-    def job_page(request: Request, job_id: str) -> HTMLResponse:
+    def job_page(request: Request, job_id: str, message: str | None = None) -> HTMLResponse:
         job = api.get_job(request, job_id)
-        return templates.TemplateResponse(request, "job.html", {"job": job, "running": RUNNING})
+        return templates.TemplateResponse(
+            request, "job.html", {"job": job, "running": RUNNING, "message": message}
+        )
+
+    @app.post("/jobs/{job_id}/delete")
+    def delete_form(job_id: str):
+        """The job page's Delete button (design: Job detail)."""
+        try:
+            api.remove_job(cfg, job_id)
+        except HTTPException as exc:
+            if exc.status_code == 404:
+                raise
+            return RedirectResponse(f"/jobs/{job_id}?message={quote(exc.detail)}", 303)
+        return RedirectResponse(f"/jobs?message={quote(f'Job {job_id} deleted')}", 303)
 
     @app.get("/jobs/{job_id}/documents", response_class=HTMLResponse)
     def job_documents(request: Request, job_id: str) -> HTMLResponse:
