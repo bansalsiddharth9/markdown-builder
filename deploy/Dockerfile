@@ -36,7 +36,8 @@ RUN specconv download-models --config config/specconv.yaml
 
 RUN useradd --create-home --uid 1000 specweb && mkdir -p /data && chown specweb /data
 USER specweb
-ENV SPECWEB_CONFIG=/app/deploy/specweb.yaml
+ENV SPECWEB_CONFIG=/app/deploy/specweb.yaml \
+    SPECWEB_DATA=/data
 
 EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=10s --retries=3 \

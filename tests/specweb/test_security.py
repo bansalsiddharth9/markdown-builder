@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import datetime as dt
 import io
+import re
 import zipfile
 from pathlib import Path
 
@@ -205,5 +206,16 @@ def test_deployment_files() -> None:
     assert "pandoc-3.14" in dockerfile and "uv sync --frozen" in dockerfile
     assert "playwright install" in dockerfile and "download-models" in dockerfile
     assert "USER " in dockerfile  # not root
-    web_cfg = yaml.safe_load((REPO / "deploy/specweb.yaml").read_text())
-    assert web_cfg["data_dir"] == "/data"
+    assert re.search(r"ENV [^\n]*(\\\n[^\n]*)*SPECWEB_DATA=/data\b", dockerfile)  # on its volume
+
+
+def test_single_settings_file_for_local_and_docker(monkeypatch: pytest.MonkeyPatch) -> None:
+    from specweb.settings import load_config
+
+    assert [p.name for p in (REPO / "deploy").glob("*.yaml")] == ["specweb.yaml"]
+    monkeypatch.delenv("SPECWEB_DATA", raising=False)
+    local = load_config(REPO / "deploy/specweb.yaml")
+    assert local.data_dir == REPO / "data"  # git-ignored project folder
+    assert local.specconv_config == REPO / "config/specconv.yaml"
+    monkeypatch.setenv("SPECWEB_DATA", "/data")
+    assert load_config(REPO / "deploy/specweb.yaml").data_dir == Path("/data")

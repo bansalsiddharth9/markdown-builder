@@ -114,13 +114,14 @@ Unknown keys are errors, so a typo never goes unnoticed.
 
 A browser UI on top of the two tools: upload files or paste URLs, follow the job, review each document side by side with its source, tick the review queue, approve, and download. Approved documents are kept in a library. There are no accounts: everyone who can reach the port can use every feature, so run it on the internal network only.
 
-Run it locally (two processes, same settings):
+Run it locally (two processes, same settings file; jobs and the library go into `data/`):
 
 ```bash
-cp deploy/specweb.yaml my-specweb.yaml        # then set data_dir, e.g. data
-uv run specweb serve  --config my-specweb.yaml --port 8000
-uv run specweb worker --config my-specweb.yaml
+uv run specweb serve  --config deploy/specweb.yaml --port 8000
+uv run specweb worker --config deploy/specweb.yaml
 ```
+
+Then open http://localhost:8000. `deploy/specweb.yaml` is the only settings file, for local runs and Docker alike; the Docker image keeps its data on the `/data` volume (`SPECWEB_DATA`).
 
 Deploy with Docker Compose (web, worker and a Caddy proxy with HTTPS, sharing one data volume):
 

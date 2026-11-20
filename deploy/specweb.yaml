@@ -1,6 +1,7 @@
-# specweb settings for the Docker image (design: Configuration).
-# Paths are relative to this file (/app/deploy).
-data_dir: /data
+# specweb settings, used both locally and in the Docker image (design: Configuration).
+# Paths are relative to this file. Locally the data goes to the project's data/
+# folder (git-ignored); the Docker image sets SPECWEB_DATA=/data, its volume.
+data_dir: ../data
 specconv_config: ../config/specconv.yaml
 specval_config: ../config/specval.yaml
 acceptance: ../config/acceptance.yaml
