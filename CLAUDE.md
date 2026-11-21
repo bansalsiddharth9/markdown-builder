@@ -93,6 +93,9 @@ uv run specweb worker --config deploy/specweb.yaml
   are served from disk). Python changes to
   `specweb` need a server restart. Restarting can drop a VS Code port forward; the server is
   still reachable at `http://<host>:8000`.
+- **Restarting the worker ends running jobs.** At start it marks jobs left in
+  fetching/converting/validating as `error` (HP6). Check the Jobs page first, and never run two
+  workers on the same data folder.
 - **Strict CSP** (`script-src 'self'; style-src 'self'`): no inline `<script>`, `style=` or
   `onclick=`. Put JS in `specweb/static/*.js` and CSS in `static/style.css`.
 - **Tests check the rendered HTML.** In templates, use Jinja comments `{# #}`, not `<!-- -->`.

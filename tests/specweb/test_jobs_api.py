@@ -197,7 +197,7 @@ def test_delete_button_removes_job_and_files(client, tmp_path: Path) -> None:
 def test_running_job_cannot_be_deleted(client, tmp_path: Path) -> None:
     job = upload(client, files=[("a.pdf", PDF)]).json()
     _set_status(tmp_path, job["id"], "converting")
-    assert 'action="/jobs/' + job["id"] + '/delete"' not in client.get(f"/jobs/{job['id']}").text
+    assert 'data-open-dialog="confirm-delete"' not in client.get(f"/jobs/{job['id']}").text
     response = client.post(f"/jobs/{job['id']}/delete")  # follows the redirect
     assert "delete it when it is done" in response.text
     assert (tmp_path / "data/jobs" / job["id"]).is_dir()
@@ -205,3 +205,77 @@ def test_running_job_cannot_be_deleted(client, tmp_path: Path) -> None:
 
 def test_delete_unknown_job_is_404(client) -> None:
     assert client.post("/jobs/000000000000/delete").status_code == 404
+
+
+def test_delete_button_appears_when_polling_sees_the_job_finish(client, tmp_path: Path) -> None:
+    """The button is in the polled fragment, so it shows up without a reload
+    once the job is done; the dialog stays outside it, so polling never
+    closes an open dialog."""
+    job = upload(client, files=[("a.pdf", PDF)]).json()
+    _set_status(tmp_path, job["id"], "converting")
+    assert "data-open-dialog" not in client.get(f"/jobs/{job['id']}/documents").text
+    _set_status(tmp_path, job["id"], "done")
+    fragment = client.get(f"/jobs/{job['id']}/documents").text
+    assert '<button type="button" class="danger" data-open-dialog="confirm-delete">' in fragment
+    assert "<dialog" not in fragment
+
+
+def test_unexpected_worker_error_does_not_leave_job_running(
+    client, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Any error ends the job as "error" (not stuck in "converting"), so it can
+    be read, deleted and expired."""
+    from specweb import worker
+
+    def broken_manifest(*_args) -> None:
+        raise KeyError("id")
+
+    monkeypatch.setattr(worker, "_record_conversion", broken_manifest)
+    job = upload(client, files=[("a.pdf", PDF)]).json()
+    job = client.get(f"/api/jobs/{job['id']}").json()
+    assert job["status"] == "error"
+    assert "KeyError" in job["error"]
+    assert [d["status"] for d in job["documents"]] == ["error"]
+    assert client.delete(f"/api/jobs/{job['id']}").status_code == 204
+
+
+def test_worker_start_ends_jobs_cut_off_by_a_stop(client, tmp_path: Path) -> None:
+    """A job that was running when the worker stopped is lost from the queue;
+    at the next start it becomes "error" instead of running for ever (HP6).
+    Queued jobs stay: the queue still has them."""
+    from specweb.settings import WebConfig
+    from specweb.worker import recover_interrupted_jobs
+
+    cut_off, waiting, finished = (upload(client, files=[("a.pdf", PDF)]).json() for _ in range(3))
+    _set_status(tmp_path, cut_off["id"], "converting")
+    _set_status(tmp_path, waiting["id"], "queued")
+
+    assert recover_interrupted_jobs(WebConfig(data_dir=tmp_path / "data")) == [cut_off["id"]]
+    job = client.get(f"/api/jobs/{cut_off['id']}").json()
+    assert job["status"] == "error" and "worker stopped" in job["error"]
+    assert client.get(f"/api/jobs/{waiting['id']}").json()["status"] == "queued"
+    assert client.get(f"/api/jobs/{finished['id']}").json()["status"] == "done"
+
+
+def test_worker_command_recovers_before_consuming(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`specweb worker` runs the recovery before it takes the first task."""
+    import huey.consumer
+    from specweb import cli, worker
+
+    calls: list[str] = []
+    monkeypatch.setattr(worker, "recover_interrupted_jobs", lambda cfg: calls.append("recover"))
+
+    class FakeConsumer:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        def run(self) -> None:
+            calls.append("consume")
+
+    monkeypatch.setattr(huey.consumer, "Consumer", FakeConsumer)
+    config = tmp_path / "specweb.yaml"
+    config.write_text(f"data_dir: {tmp_path / 'data'}\n", encoding="utf-8")
+    cli.worker(config)
+    assert calls == ["recover", "consume"]

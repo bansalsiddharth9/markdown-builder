@@ -25,4 +25,10 @@
   {% endfor %}
   </tbody>
 </table>
+{# Opens the confirmation dialog in job.html. Hidden while the job runs. #}
+{% if job.status not in running %}
+<div class="danger-zone">
+  <button type="button" class="danger" data-open-dialog="confirm-delete">Delete job</button>
+</div>
+{% endif %}
 </div>

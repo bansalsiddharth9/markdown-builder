@@ -73,12 +73,21 @@ def serve(
 
 @app.command()
 def worker(config: ConfigOpt = None) -> None:
-    """Run the queue consumer that converts and validates jobs."""
+    """Run the queue consumer that converts and validates jobs.
+
+    First ends jobs that a previous worker stop left half done (see
+    worker.recover_interrupted_jobs). Run one worker command per data folder.
+    """
     cfg = _load(config)
     from huey.consumer import Consumer
 
     # Import after _load: the queue file location comes from $SPECWEB_DATA.
+    from specweb import worker as jobs_worker
     from specweb.tasks import huey
+
+    # Jobs that were running when the worker last stopped are lost from the
+    # queue; mark them as errors before taking new tasks (deviation HP6).
+    jobs_worker.recover_interrupted_jobs(cfg)
 
     # worker_concurrency jobs at once, each in its own consumer process (default 1,
     # because conversion needs several GB of memory; design: Jobs and workers).

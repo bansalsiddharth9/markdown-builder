@@ -20,7 +20,9 @@ import subprocess
 import sys
 from pathlib import Path
 
-from specweb.db import Document, Job, sessions
+from sqlalchemy import select
+
+from specweb.db import RUNNING, Document, Job, sessions
 from specweb.jobs import job_folder
 from specweb.settings import WebConfig
 
@@ -83,12 +85,41 @@ def _set(cfg: WebConfig, job_id: str, **changes) -> None:
         session.commit()
 
 
+# Shown on a job that was cut off by a worker stop (see recover_interrupted_jobs).
+INTERRUPTED = "the worker stopped while this job was running; upload it again"
+
+
+def recover_interrupted_jobs(cfg: WebConfig) -> list[str]:
+    """End jobs that a worker stop left in a running state; return their ids.
+
+    Called once when `specweb worker` starts, before it takes any task. Huey
+    removes a task from the queue when a worker picks it up, so a job that was
+    fetching, converting or validating when the worker stopped (a restart, a
+    crash, a reboot) will never be run again. Without this it would show as
+    running for ever, could not be deleted (409) and would never expire
+    (deviation HP6). Queued jobs are left alone: their tasks are still in the
+    queue and run normally.
+
+    This assumes one worker command per data folder (as in docker-compose.yml;
+    worker_concurrency runs several jobs inside that one command). A second
+    worker started next to a busy one would end the first one's jobs.
+    """
+    with sessions(cfg.data_dir)() as session:
+        jobs = session.scalars(select(Job).where(Job.status.in_(RUNNING))).all()
+        ids = [job.id for job in jobs]
+    for job_id in ids:
+        log.warning("job %s: %s", job_id, INTERRUPTED)
+        _set(cfg, job_id, status="error", error=INTERRUPTED, doc_status="error")
+    return ids
+
+
 def process_job(cfg: WebConfig, job_id: str) -> None:
     """Fetch (if there are URLs), convert and validate one job; record results.
 
     Exit codes 0 and 1 of convert and validate are normal (1 means some
-    documents failed or have findings). Any other code, a timeout or an
-    OSError puts the job in "error" with the message.
+    documents failed or have findings). Any other code, a timeout or any
+    other error puts the job in "error" with the message, so a job never stays
+    in a running state.
     """
     with sessions(cfg.data_dir)() as session:
         job = session.get(Job, job_id)
@@ -143,6 +174,13 @@ def process_job(cfg: WebConfig, job_id: str) -> None:
     except (StepTimeout, RuntimeError, OSError) as exc:
         log.error("job %s: %s", job_id, exc)
         _set(cfg, job_id, status="error", error=str(exc), doc_status="error")
+    except Exception as exc:
+        # Anything else (a broken manifest or report, a bug) must not leave the
+        # job in "converting" or "validating" for good: a running job cannot be
+        # deleted and never expires (deviation HP4). Full traceback in the log.
+        log.exception("job %s: unexpected error", job_id)
+        message = f"internal error: {type(exc).__name__}: {exc} (see the worker log)"
+        _set(cfg, job_id, status="error", error=message, doc_status="error")
 
 
 def _record_conversion(cfg: WebConfig, job_id: str, output: Path) -> None:

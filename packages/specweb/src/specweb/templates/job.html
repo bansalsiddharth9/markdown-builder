@@ -11,17 +11,13 @@
 <p>Submitted {{ job.created_at }}{% if job.submitted_by %} by {{ job.submitted_by }}{% endif %}{% if job.options.split %} · split at level {{ job.options.split }}{% endif %}</p>
 {% if message %}<p class="error" role="status">{{ message }}</p>{% endif %}
 {% include "_job_documents.html" %}
-{# Delete job (deviation HP3): hidden while the job runs (the server refuses
-   it then too, with 409). The button only opens the confirmation dialog;
-   static/dialog.js does that, because the CSP allows no inline script.
-   Only the dialog's Delete button posts to /jobs/<id>/delete. Cancel uses
-   formmethod="dialog", which closes the dialog without any script.
-   Note: this part is not refreshed by polling, so after a running job
-   finishes it appears only when the page is reloaded. #}
-{% if job.status not in running %}
-<div class="danger-zone">
-  <button type="button" class="danger" data-open-dialog="confirm-delete">Delete job</button>
-</div>
+{# Delete job (deviations HP3, HP5). The "Delete job" button is in
+   _job_documents.html, which polling refreshes, so it appears as soon as the
+   job finishes. The dialog is here, outside the polled part, so a refresh
+   never closes an open dialog. static/dialog.js opens it (the CSP allows no
+   inline script). Only the dialog's Delete button posts to /jobs/<id>/delete;
+   the server refuses a running job (409). Cancel uses formmethod="dialog",
+   which closes the dialog without any script. #}
 <dialog id="confirm-delete" aria-labelledby="confirm-delete-title">
   <form method="post" action="/jobs/{{ job.id }}/delete">
     <h2 id="confirm-delete-title">Delete job {{ job.id }}?</h2>
@@ -34,5 +30,4 @@
   </form>
 </dialog>
 <script src="/static/dialog.js"></script>
-{% endif %}
 {% endblock %}
