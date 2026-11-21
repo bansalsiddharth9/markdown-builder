@@ -1,3 +1,11 @@
+{#- Base layout: every page extends this. Sidebar navigation, main area, footer.
+    Blocks: title, content, nav_extra (extra sidebar links; unused so far).
+    Context: nav (optional) names the current page, "upload", "jobs" or
+    "library"; child templates set it with {% set nav = "..." %} and the
+    matching sidebar link gets aria-current="page" (highlighted by the CSS).
+    No inline scripts or styles anywhere: the CSP forbids them (deviation SEC3).
+    The minus sign before the comment's end strips the newline after it, so the
+    page still starts with the doctype. -#}
 <!doctype html>
 <html lang="en">
 <head>
@@ -5,11 +13,15 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="dark">
   <title>{% block title %}Spec converter{% endblock %}</title>
+  {# htmx would add an inline <style> for its loading indicators; the CSP blocks
+     inline styles, so that is switched off. #}
   <meta name="htmx-config" content='{"includeIndicatorStyles": false}'>
   <link rel="stylesheet" href="/static/style.css">
+  {# Vendored htmx 2.0.4 (deviation WB9), served from this site as the CSP requires. #}
   <script src="/static/htmx.min.js"></script>
 </head>
 <body>
+  {# A page that sets no nav highlights no link. #}
   {%- set nav = nav | default("") %}
   <aside class="sidebar">
     <a class="brand" href="/"><span class="mark" aria-hidden="true">S</span>Spec converter</a>

@@ -25,6 +25,7 @@ class InputDoc:
 
     @property
     def display_source(self) -> str:
+        """The URL for a web source, else the relative path; used in logs and messages."""
         if self.source is not None:
             return self.source.url
         assert self.rel_path is not None
@@ -33,18 +34,22 @@ class InputDoc:
 
 @dataclass(frozen=True)
 class ScanResult:
+    """Inputs found by scan, plus files skipped because of their extension."""
+
     docs: list[InputDoc]
     skipped: list[str]  # files with other extensions, relative paths
 
 
 def slugify(name: str) -> str:
     """'CTA-608-E' -> 'cta-608-e'; 'Spec v1.2 (draft)' -> 'spec-v1-2-draft'."""
+    # NFKD splits accented letters ("é" -> "e" + accent); the accent is then dropped.
     text = unicodedata.normalize("NFKD", name).encode("ascii", "ignore").decode("ascii")
     slug = re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")
     return slug or "document"
 
 
 def _unique(slug: str, taken: set[str]) -> str:
+    """Return slug, or slug-2, slug-3, ... if it is taken. Does not add it to taken."""
     if slug not in taken:
         return slug
     n = 2
@@ -130,12 +135,19 @@ def scan(
 
 @dataclass(frozen=True)
 class Route:
+    """Which converter handles a document, and with which input format."""
+
     name: str  # recorded in the manifest, e.g. "pandoc:html"
     converter: str | None  # "pandoc", "docling", or None when not converted
     from_format: str | None = None
 
 
 def route(doc: InputDoc) -> Route:
+    """Pick the converter by source type.
+
+    PDFs always route to Docling here; the text-layer check that can stop a PDF
+    (no_text_layer) runs separately in the pipeline.
+    """
     if doc.source_type in ("html", "web"):
         return Route("pandoc:html", "pandoc", "html")
     if doc.source_type == "docx":

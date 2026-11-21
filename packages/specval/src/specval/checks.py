@@ -34,6 +34,13 @@ MAX_LISTED = 10  # findings listed per difference before "… and N more"
 
 @dataclass
 class Document:
+    """One converted document and everything the checks read about it.
+
+    conversion is the document's manifest record (options, own URLs);
+    source_path is its saved source.* file, None when missing; questions are
+    all acceptance questions (V9 picks this document's).
+    """
+
     id: str
     folder: Path
     entry: ManifestEntry
@@ -48,6 +55,8 @@ class Document:
 
     @property
     def from_docling(self) -> bool:
+        """True when Docling (the PDF converter) made the Markdown. Docling
+        escapes &, < and > inside code, which V3, V4, V6 and V8 undo."""
         return self.entry.converter == "docling"
 
 
@@ -60,7 +69,11 @@ def _align(
     what: str,
 ) -> list[Finding]:
     """Findings for items missing from or extra in the Markdown, by aligning
-    the two sequences of keys. source: (key, location); markdown: (key, line)."""
+    the two sequences of keys. source: (key, location); markdown: (key, line).
+
+    All findings fail. A changed item ("replace") is reported twice: once as
+    missing, once as extra.
+    """
     matcher = difflib.SequenceMatcher(
         a=[k for k, _ in source], b=[k for k, _ in markdown], autojunk=False
     )
@@ -90,6 +103,8 @@ def _align(
 
 
 def _limit(findings: list[Finding], what: str) -> list[Finding]:
+    """The first MAX_LISTED findings plus one "… and N more" finding, which
+    takes the first finding's severity."""
     if len(findings) <= MAX_LISTED:
         return findings
     rest = len(findings) - MAX_LISTED
@@ -99,6 +114,15 @@ def _limit(findings: list[Finding], what: str) -> list[Finding]:
 
 
 def check_v1(doc: Document, cfg: SpecvalConfig) -> CheckResult:
+    """V1 structure counts: headings, tables, code blocks and images.
+
+    Fail when a count differs from the source; the findings then name the
+    items that differ. A count the source cannot give (None, e.g. PDF
+    headings) is shown but not compared. PDF tables come from pdfplumber and
+    are approximate: a difference up to pdf_table_count_tolerance warns,
+    more fails (design V1; deviations FS-1). Not applicable without a source
+    reference or readable Markdown.
+    """
     ref, md = doc.reference, doc.md
     result = CheckResult("V1", "Structure counts", PASS, "")
     if ref is None or md is None:
@@ -108,6 +132,8 @@ def check_v1(doc: Document, cfg: SpecvalConfig) -> CheckResult:
     findings: list[Finding] = []
 
     def compare(what: str, source_n: int | None, md_n: int, details: Callable[[], list[Finding]]):
+        """Record both counts; when they differ, add a fail and the details.
+        details is a callable so the alignment only runs when needed."""
         counts[what] = {"source": source_n, "markdown": md_n}
         if source_n is None or source_n == md_n:
             return
@@ -176,10 +202,12 @@ def check_v1(doc: Document, cfg: SpecvalConfig) -> CheckResult:
 
 
 def _row_key(rows: tuple[tuple[str, ...], ...]) -> str:
+    """A table's first row, cut to 80 characters: its key for alignment."""
     return " | ".join(rows[0])[:80] if rows else ""
 
 
 def _code_key(text: str) -> str:
+    """A code block's first 80 normalized characters: its key for alignment."""
     return normalize(text)[:80]
 
 
@@ -187,6 +215,15 @@ def _code_key(text: str) -> str:
 
 
 def check_v2(doc: Document, cfg: SpecvalConfig) -> CheckResult:
+    """V2 section numbering: numbered headings in the right order.
+
+    When the source has headings (HTML, DOCX), a numbered heading missing
+    from or extra in the Markdown fails. A number that is skipped,
+    duplicated or out of order in the Markdown fails, but only warns when
+    the source has the same problem. PDF has no source headings, so only the
+    Markdown order is checked (deviations V-e). Not applicable when no
+    heading is numbered.
+    """
     md = doc.md
     result = CheckResult("V2", "Section numbering", PASS, "")
     if md is None:
@@ -212,6 +249,7 @@ def check_v2(doc: Document, cfg: SpecvalConfig) -> CheckResult:
             ),
             "numbered heading",
         )
+    # Sequence problems the source itself has: a faithful copy only warns.
     in_source = (
         {(p.kind, p.number) for p in sequence_problems([n for n, _ in src_numbers])}
         if src_numbers is not None
@@ -251,6 +289,9 @@ def check_v2(doc: Document, cfg: SpecvalConfig) -> CheckResult:
 def _tokens(
     family: Family, segments: list[Segment], decode: bool
 ) -> tuple[Counter[str], dict[str, Segment]]:
+    """Count a family's tokens in the segments, and remember the first
+    segment of each token for the finding's context. decode: undo HTML
+    escaping in code segments (Docling output)."""
     counts: Counter[str] = Counter()
     first: dict[str, Segment] = {}
     for segment in segments:
@@ -266,6 +307,8 @@ def _tokens(
 
 
 def _context(text: str, token: str, width: int = 70) -> str:
+    """Up to width characters each side of the token's first occurrence,
+    with "…" where text was cut. The start of the text when not found."""
     flat = normalize(text)
     i = flat.lower().find(token.lower())
     if i < 0:
@@ -275,6 +318,14 @@ def _context(text: str, token: str, width: int = 70) -> str:
 
 
 def check_v4(doc: Document, cfg: SpecvalConfig) -> CheckResult:
+    """V4 exact values: protected tokens (hex, timecodes, numbers with units,
+    normative keywords, XML names) counted as multisets.
+
+    Fail when any token occurs a different number of times in the source and
+    the Markdown; the 10 tokens with the largest differences are listed per
+    family. There is no warn. Not applicable without a source reference or
+    readable Markdown.
+    """
     ref, md = doc.reference, doc.md
     result = CheckResult("V4", "Exact values", PASS, "")
     if ref is None or md is None:
@@ -348,8 +399,10 @@ def check_v4(doc: Document, cfg: SpecvalConfig) -> CheckResult:
 # --------------------------------------------------------------------- V7
 
 LINT_DISABLED = (
-    # Style rules the converters' output breaks by design (raw HTML anchors and
-    # tables, long lines, several top-level headings, Docling's flat ##).
+    # pymarkdown rule ids (deviations V-n). Style rules the converters' output
+    # breaks by design (raw HTML anchors and tables, long lines, several
+    # top-level headings, Docling's flat ##). MD051 is off because it does not
+    # know <a id> anchors; V7 checks "#…" links itself.
     "md001", "md003", "md004", "md007", "md009", "md010", "md012", "md013", "md022",
     "md024", "md025", "md026", "md028", "md029", "md030", "md031", "md032", "md033",
     "md034", "md036", "md040", "md041", "md046", "md051", "md047", "md049", "md050", "md055",
@@ -359,6 +412,9 @@ LINT_MAX_LINES = 10000  # pymarkdown time grows ~quadratically (4,350 lines: 27 
 
 
 def _url_key(url: str) -> tuple[str, str, str]:
+    """(host, path, query) to tell whether a link points at the document's own
+    page. Scheme, default ports and fragment are ignored; ".../index.html"
+    equals ".../"."""
     parts = urlsplit(url)
     host = (parts.hostname or "").lower()
     if parts.port and parts.port not in (80, 443):
@@ -381,6 +437,15 @@ def _local_target(href: str) -> str | None:
 
 
 def check_v7(doc: Document, cfg: SpecvalConfig) -> CheckResult:
+    """V7 Markdown hygiene: front matter, links, media, heading levels, lint.
+
+    Fail: invalid front matter, a wrong id or source_sha256 (deviations V-m),
+    no source file, a "#…" link to an anchor that does not exist (deviations
+    V-k), a missing local image or media/ file (deviations V-l). Warn: a link
+    to the document's own URL not rewritten to "#…", an image still on the
+    web, a heading level jump, any lint issue (deviations V-n). Unreadable
+    Markdown fails.
+    """
     result = CheckResult("V7", "Markdown hygiene", PASS, "")
     findings: list[Finding] = []
     md = doc.md
@@ -420,6 +485,7 @@ def check_v7(doc: Document, cfg: SpecvalConfig) -> CheckResult:
         href = link.href.strip()
         if href.startswith("#"):
             target = unquote(href[1:])
+            # Accept the id either percent-decoded or as written. A bare "#" is fine.
             if target and target not in targets and href[1:] not in targets:
                 broken.append(
                     Finding(
@@ -429,6 +495,7 @@ def check_v7(doc: Document, cfg: SpecvalConfig) -> CheckResult:
                         excerpt=md.excerpt(link.line),
                     )
                 )
+        # Only web links with a fragment: the converter rewrites those to "#…".
         elif own_keys and urlsplit(href).fragment and urlsplit(href).scheme in ("http", "https"):
             if _url_key(href) in own_keys:
                 self_links.append(
@@ -451,11 +518,12 @@ def check_v7(doc: Document, cfg: SpecvalConfig) -> CheckResult:
         if parts.scheme in ("http", "https") or src.startswith("//"):
             remote.append(Finding(WARN, f"image not stored locally: {src}", md_line=image.line))
             continue
-        if parts.scheme == "data":
+        if parts.scheme == "data":  # embedded image (e.g. an inline <svg>)
             continue
         local = _local_target(src)
         if local is None:
             continue
+        # A path that leaves the document folder ("../x.png") counts as missing.
         path = (doc.folder / local).resolve()
         if not path.is_relative_to(root) or not path.is_file():
             missing.append(
@@ -515,6 +583,8 @@ def check_v7(doc: Document, cfg: SpecvalConfig) -> CheckResult:
 
 
 def _lint(text: str) -> list[Finding]:
+    """pymarkdown findings for the Markdown, all as warnings, with the rules
+    in LINT_DISABLED off. If pymarkdown itself fails, one warning says so."""
     from pymarkdown.api import PyMarkdownApi, PyMarkdownApiException
 
     api = PyMarkdownApi()

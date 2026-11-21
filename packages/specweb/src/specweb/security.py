@@ -26,10 +26,17 @@ from specweb.db import RUNNING, Job, sessions
 from specweb.jobs import Upload, UrlSource
 from specweb.settings import WebConfig
 
-CHUNK = 1 << 20
+CHUNK = 1 << 20  # uploads are read 1 MB at a time (deviation SEC2)
 
 
 async def read_uploads(cfg: WebConfig, files: list[UploadFile] | None) -> list[Upload]:
+    """Read the uploaded files, enforcing the limits, and check their content.
+
+    400 for too many files or content that does not match the extension;
+    413 for a file over max_file_mb. Reading in chunks stops a huge upload
+    at the limit instead of holding all of it in memory (denial of service).
+    Empty file inputs (no file name) are ignored.
+    """
     files = [f for f in files or [] if f.filename]
     if len(files) > cfg.max_files:
         raise HTTPException(400, f"at most {cfg.max_files} files per job, got {len(files)}")
@@ -50,6 +57,7 @@ async def read_uploads(cfg: WebConfig, files: list[UploadFile] | None) -> list[U
 
 
 def _is_docx(data: bytes) -> bool:
+    """True if data is a ZIP with word/document.xml (filetype only sees "zip")."""
     try:
         with zipfile.ZipFile(io.BytesIO(data)) as zf:
             return "word/document.xml" in zf.namelist()
@@ -58,6 +66,11 @@ def _is_docx(data: bytes) -> bool:
 
 
 def _is_html(data: bytes) -> bool:
+    """A loose test: text (no NUL bytes, not a known binary type) with markup.
+
+    filetype has no HTML detection, so this is our own (deviation SEC1).
+    Only the first 8 KB are looked at.
+    """
     head = data[:8192]
     if b"\x00" in head or filetype.guess(head) is not None:
         return False  # binary, or a known binary type (PDF, ZIP, image …)
@@ -66,6 +79,11 @@ def _is_html(data: bytes) -> bool:
 
 
 def check_content(upload: Upload) -> None:
+    """400 unless the file's content matches its extension (deviation SEC1).
+
+    This stops, for example, an executable or a ZIP renamed to .pdf from
+    reaching the converters.
+    """
     ext = PurePosixPath(upload.filename.lower()).suffix
     kind = filetype.guess(upload.data[:8192])
     ok = {
@@ -81,6 +99,12 @@ def check_content(upload: Upload) -> None:
 
 
 def check_urls(cfg: WebConfig, urls: list[UrlSource]) -> None:
+    """400 for a URL whose host is private, loopback or link-local.
+
+    Prevents server-side request forgery: users must not make the server
+    fetch internal services. Hosts in fetch_allowlist are allowed. This is
+    only the first check; the worker's fetch checks again after redirects.
+    """
     from specconv.fetch import BlockedAddress, HostGuard
 
     guard = HostGuard(cfg.fetch_allowlist)
@@ -92,6 +116,12 @@ def check_urls(cfg: WebConfig, urls: list[UrlSource]) -> None:
 
 
 def check_capacity(cfg: WebConfig, client_ip: str | None) -> None:
+    """Refuse a new job when the server is too busy or the disk too full.
+
+    507 below min_free_disk_mb; 503 when max_queue jobs are waiting or
+    running; 429 when this client already has max_jobs_per_ip. Without a
+    login, these limits stop one user from filling the queue or the disk.
+    """
     free_mb = shutil.disk_usage(cfg.data_dir).free / 2**20
     if free_mb < cfg.min_free_disk_mb:
         raise HTTPException(507, f"not enough free disk space ({free_mb:.0f} MB); try again later")
@@ -113,6 +143,10 @@ def check_capacity(cfg: WebConfig, client_ip: str | None) -> None:
 
 
 def disk_usage(cfg: WebConfig) -> dict[str, float]:
+    """MB used by the data folder (jobs, library, databases) and MB free.
+
+    Shown on the Jobs page (design: Retention).
+    """
     usage = shutil.disk_usage(cfg.data_dir)
     used = sum(p.stat().st_size for p in Path(cfg.data_dir).rglob("*") if p.is_file())
     return {"data_mb": round(used / 2**20, 1), "free_mb": round(usage.free / 2**20)}

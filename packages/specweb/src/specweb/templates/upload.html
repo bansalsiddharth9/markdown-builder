@@ -1,3 +1,7 @@
+{#- Upload page: GET / (app.upload_page); shown again by POST /jobs when the job
+    is refused (app.upload_form, status 400).
+    Context: error, the refusal message or None.
+    The form posts to /jobs and redirects to the new job's page. -#}
 {% extends "base.html" %}
 {% set nav = "upload" %}
 {% block title %}Upload · Spec converter{% endblock %}
@@ -10,6 +14,8 @@ Converted files are for <strong>internal reference only</strong>.</p>
   <label>Files (PDF, HTML, DOCX)
     <input type="file" name="files" multiple accept=".pdf,.html,.htm,.docx">
   </label>
+  {# One URL per line, optionally followed by "browser" (deviation WB6):
+     no per-row controls, so no JavaScript is needed. #}
   <label><span>Web pages, one URL per line; add <code>browser</code> after a URL for pages built by JavaScript</span>
     <textarea name="urls_text" rows="4" placeholder="https://www.w3.org/TR/ttml2/&#10;https://example.org/captions browser"></textarea>
   </label>

@@ -25,12 +25,15 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from urllib.parse import unquote, urlparse
 
-BOM = "﻿"
+BOM = "﻿"  # U+FEFF byte order mark; the character is invisible here
 
+# Opening code fence at any indentation (fences inside list items are indented).
 _FENCE_OPEN = re.compile(r"^[ \t]*(`{3,}|~{3,})")
+# A line that starts with "|" (up to 3 spaces first): a pipe table row.
 _PIPE_ROW = re.compile(r"^ {0,3}\|")
 # GFM delimiter row: | --- | :---: | ---: |  (outer pipes optional, at least one '-')
 _DELIMITER_ROW = re.compile(r"^ {0,3}\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$")
+# Indented code: 4 spaces or a tab.
 _INDENTED = re.compile(r"^(?: {4}|\t)")
 _HTML_BLOCKS = {
     "table": (re.compile(r"<table\b", re.I), re.compile(r"</table\s*>", re.I)),
@@ -44,6 +47,7 @@ _HTML_BLOCK_START = {
 }
 # ![alt](target "title") and [text](target); target without spaces or in <...>
 _MD_LINK_TARGET = re.compile(r"(\]\()(<[^>\n]*>|[^)\s]+)")
+# src="..." or href='...' in raw HTML; group 2 is the quote, group 3 the value.
 _HTML_SRC = re.compile(r"""(\b(?:src|href)=)(["'])(.*?)\2""", re.I)
 
 
@@ -53,6 +57,8 @@ class PostprocessError(ValueError):
 
 @dataclass(frozen=True)
 class Region:
+    """A run of lines [start, end) that is either plain text or protected."""
+
     start: int  # first line index
     end: int  # one past the last line index
     protected: bool
@@ -86,6 +92,7 @@ def _is_blank(line: str) -> bool:
 def _scan_fence(lines: list[str], i: int, marker: str) -> int:
     """Return one past the closing fence line (or len(lines) if unclosed)."""
     char, length = marker[0], len(marker)
+    # Same character, at least as many, nothing else on the line (CommonMark rule).
     close = re.compile(r"^[ \t]*" + re.escape(char) + "{" + str(length) + r",}[ \t]*$")
     for j in range(i + 1, len(lines)):
         if close.match(lines[j]):
@@ -111,6 +118,7 @@ def _scan_html_block(lines: list[str], i: int, kind: str) -> int:
 
 
 def _scan_pipe_table(lines: list[str], i: int) -> int:
+    """A pipe table runs to the next blank line."""
     j = i
     while j < len(lines) and not _is_blank(lines[j]):
         j += 1
@@ -118,7 +126,10 @@ def _scan_pipe_table(lines: list[str], i: int) -> int:
 
 
 def _scan_indented(lines: list[str], i: int) -> int:
-    """Indented code: indented lines, including blank lines between them."""
+    """Indented code: indented lines, including blank lines between them.
+
+    Trailing blank lines are not part of the block, so they can still be collapsed.
+    """
     j = i
     last_code = i
     while j < len(lines):
@@ -138,6 +149,7 @@ def split_regions(text: str) -> list[Region]:
     i = 0
 
     def protect(end: int, kind: str) -> None:
+        """Close the open text region at i, add a protected one up to end, continue there."""
         nonlocal text_start, i
         if text_start < i:
             regions.append(Region(text_start, i, False, "text"))
@@ -146,6 +158,8 @@ def split_regions(text: str) -> list[Region]:
 
     while i < len(lines):
         line = lines[i]
+        # Indented code can only start after a blank line; otherwise an indented
+        # line is a paragraph continuation.
         prev_blank = i == 0 or _is_blank(lines[i - 1])
         fence = _FENCE_OPEN.match(line)
         if fence:
@@ -154,6 +168,9 @@ def split_regions(text: str) -> list[Region]:
             protect(_scan_html_block(lines, i, "table"), "html_table")
         elif _HTML_BLOCK_START["pre"].match(line):
             protect(_scan_html_block(lines, i, "pre"), "html_pre")
+        # A pipe table either starts with "|", or is a header row followed by a
+        # delimiter row. The delimiter row must hold a "|", or "---" under a line
+        # with a "|" in it (a setext heading) would count.
         elif _PIPE_ROW.match(line) or (
             "|" in line
             and i + 1 < len(lines)
@@ -174,7 +191,7 @@ def split_regions(text: str) -> list[Region]:
 
 
 def _clean_text_lines(lines: list[str]) -> list[str]:
-    """Steps 2 and 3 on one unprotected region."""
+    """Steps 2 and 3 on one unprotected region: strip line ends, keep at most 2 blank lines."""
     out: list[str] = []
     blank_run = 0
     for line in lines:
@@ -205,6 +222,7 @@ def _relative_media_target(target: str, out_dir: Path) -> str | None:
     except ValueError:
         return None
     new = PurePosixPath(*rel.parts).as_posix()
+    # Markdown link targets cannot hold a space unless wrapped in <...>.
     return f"<{new}>" if bracketed or " " in new else new
 
 
@@ -212,10 +230,12 @@ def rewrite_media_links(line: str, out_dir: Path) -> str:
     """Step 4 on one unprotected line."""
 
     def md(m: re.Match[str]) -> str:
+        """Replacement for a Markdown link target."""
         new = _relative_media_target(m.group(2), out_dir)
         return m.group(1) + (new if new is not None else m.group(2))
 
     def html(m: re.Match[str]) -> str:
+        """Replacement for an HTML attribute value; <...> brackets are not used there."""
         new = _relative_media_target(m.group(3), out_dir)
         value = new.strip("<>") if new is not None else m.group(3)
         return m.group(1) + m.group(2) + value + m.group(2)
@@ -225,6 +245,8 @@ def rewrite_media_links(line: str, out_dir: Path) -> str:
 
 @dataclass
 class PostprocessResult:
+    """Cleaned Markdown and any warnings."""
+
     markdown: str
     warnings: list[str]
 
@@ -238,6 +260,7 @@ def postprocess(data: bytes | str, out_dir: Path) -> PostprocessResult:
     for region in split_regions(text):
         chunk = lines[region.start : region.end]
         if region.protected:
+            # Never edit protected lines; only warn when they hold a link step 4 would fix.
             for offset, line in enumerate(chunk):
                 if rewrite_media_links(line, out_dir) != line:
                     warnings.append(

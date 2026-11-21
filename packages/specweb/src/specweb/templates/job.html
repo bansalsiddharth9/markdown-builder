@@ -1,3 +1,8 @@
+{#- Job detail page: GET /jobs/<id> (app.job_page).
+    Context: job (job dict with documents), running (the RUNNING states),
+    message (error from a refused delete, or None).
+    The documents table is _job_documents.html, which refreshes itself while
+    the job runs. -#}
 {% extends "base.html" %}
 {% set nav = "jobs" %}
 {% block title %}Job {{ job.id }} · Spec converter{% endblock %}
@@ -6,6 +11,13 @@
 <p>Submitted {{ job.created_at }}{% if job.submitted_by %} by {{ job.submitted_by }}{% endif %}{% if job.options.split %} · split at level {{ job.options.split }}{% endif %}</p>
 {% if message %}<p class="error" role="status">{{ message }}</p>{% endif %}
 {% include "_job_documents.html" %}
+{# Delete job (deviation HP3): hidden while the job runs (the server refuses
+   it then too, with 409). The button only opens the confirmation dialog;
+   static/dialog.js does that, because the CSP allows no inline script.
+   Only the dialog's Delete button posts to /jobs/<id>/delete. Cancel uses
+   formmethod="dialog", which closes the dialog without any script.
+   Note: this part is not refreshed by polling, so after a running job
+   finishes it appears only when the page is reloaded. #}
 {% if job.status not in running %}
 <div class="danger-zone">
   <button type="button" class="danger" data-open-dialog="confirm-delete">Delete job</button>

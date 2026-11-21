@@ -19,6 +19,8 @@ DEFAULT_CONFIG_PATH = Path("config/specconv.yaml")
 
 RENDER_MODES = ("static", "browser")
 CLEAN_MODES = ("none", "main-content")
+# A source id: letters, digits, '.', '_', '-', starting with a letter or digit, so it is
+# safe as a folder name (deviation D5).
 SOURCE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
 
@@ -28,6 +30,8 @@ class ConfigError(ValueError):
 
 @dataclass(frozen=True)
 class PdfConfig:
+    """Text-layer thresholds for PDF routing and where the Docling models live."""
+
     min_chars_per_page: int = 50
     min_text_page_ratio: float = 0.7
     # Pinned Docling models (specconv download-models). Relative paths are
@@ -37,12 +41,16 @@ class PdfConfig:
 
 @dataclass(frozen=True)
 class HtmlConfig:
+    """HTML preparation settings: elements removed with their content."""
+
     # <template> content is never displayed by browsers (deviations Q19).
     strip_tags: tuple[str, ...] = ("script", "style", "noscript", "template")
 
 
 @dataclass(frozen=True)
 class FetchConfig:
+    """Settings for downloading web sources."""
+
     timeout_s: float = 30.0
     retries: int = 3
     user_agent: str = "specconv/1.0"
@@ -58,6 +66,8 @@ class FetchConfig:
 
 @dataclass(frozen=True)
 class SpecconvConfig:
+    """The whole specconv.yaml; every field has a built-in default."""
+
     pdf: PdfConfig = field(default_factory=PdfConfig)
     html: HtmlConfig = field(default_factory=HtmlConfig)
     fetch: FetchConfig = field(default_factory=FetchConfig)
@@ -85,6 +95,7 @@ class Source:
 
 
 def _read_yaml(path: Path) -> Any:
+    """Parse a YAML file; a missing file or bad YAML becomes ConfigError."""
     try:
         text = path.read_text(encoding="utf-8")
     except FileNotFoundError as exc:
@@ -96,6 +107,7 @@ def _read_yaml(path: Path) -> Any:
 
 
 def _mapping(value: Any, where: str) -> dict[str, Any]:
+    """Check that value is a mapping. An empty section (None) counts as an empty mapping."""
     if value is None:
         return {}
     if not isinstance(value, dict):
@@ -104,12 +116,15 @@ def _mapping(value: Any, where: str) -> dict[str, Any]:
 
 
 def _reject_unknown(data: dict[str, Any], allowed: set[str], where: str) -> None:
+    """Raise ConfigError for any key not in allowed, so typos are not ignored (deviation D3)."""
     unknown = set(data) - allowed
     if unknown:
         raise ConfigError(f"{where}: unknown keys {sorted(unknown)}; allowed: {sorted(allowed)}")
 
 
 def _int(value: Any, where: str, minimum: int | None = None) -> int:
+    """Check for an integer, optionally at least minimum."""
+    # bool is a subclass of int in Python; `true` must not pass as 1.
     if isinstance(value, bool) or not isinstance(value, int):
         raise ConfigError(f"{where}: expected an integer, got {value!r}")
     if minimum is not None and value < minimum:
@@ -118,6 +133,7 @@ def _int(value: Any, where: str, minimum: int | None = None) -> int:
 
 
 def _float(value: Any, where: str, lo: float | None = None, hi: float | None = None) -> float:
+    """Check for a number (int or float, not bool) within the optional bounds."""
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise ConfigError(f"{where}: expected a number, got {value!r}")
     value = float(value)
@@ -127,12 +143,14 @@ def _float(value: Any, where: str, lo: float | None = None, hi: float | None = N
 
 
 def _str(value: Any, where: str) -> str:
+    """Check for a non-empty string."""
     if not isinstance(value, str) or not value:
         raise ConfigError(f"{where}: expected a non-empty string, got {value!r}")
     return value
 
 
 def _str_list(value: Any, where: str) -> tuple[str, ...]:
+    """Check for a list of non-empty strings; returned as a tuple for the frozen dataclasses."""
     if not isinstance(value, list) or not all(isinstance(v, str) and v for v in value):
         raise ConfigError(f"{where}: expected a list of non-empty strings, got {value!r}")
     return tuple(value)
@@ -145,7 +163,8 @@ def load_config(path: Path | None = None) -> SpecconvConfig:
     """Load specconv.yaml.
 
     With path=None the default file is used if it exists, otherwise built-in
-    defaults. An explicitly given path must exist.
+    defaults. An explicitly given path must exist. Relative paths inside the
+    file are resolved against the file's own folder, not the working directory.
     """
     if path is None:
         if not DEFAULT_CONFIG_PATH.exists():
@@ -274,13 +293,14 @@ def load_sources(path: Path) -> list[Source]:
             drop = _str_list(item["drop_selectors"], f"{where}.drop_selectors")
             if clean != "main-content":
                 raise ConfigError(f"{where}.drop_selectors: only allowed with clean: main-content")
+            # Compile now so a bad selector is a config error, not a failure mid-run (F14).
             for selector in drop:
                 try:
                     soupsieve.compile(selector)
                 except soupsieve.SelectorSyntaxError as exc:
                     raise ConfigError(
                         f"{where}.drop_selectors: invalid CSS selector {selector!r}: "
-                        f"{str(exc).splitlines()[0]}"
+                        f"{str(exc).splitlines()[0]}"  # the rest is a caret diagram
                     ) from exc
 
         sources.append(Source(id=sid, url=url, render=render, clean=clean, drop_selectors=drop))

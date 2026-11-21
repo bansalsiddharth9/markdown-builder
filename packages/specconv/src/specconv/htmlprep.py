@@ -7,7 +7,8 @@ spec/deviations.md. Steps, in order:
 1. Find the document's own URL(s): the sources.yaml URL and its final URL
    (web sources), the browser's ``<!-- saved from url=(NNNN)… -->`` comment,
    ``<link rel="canonical">``, and the ``self_urls`` config map.
-2. Remove the configured strip_tags (script, style, noscript). For web
+2. Remove the configured strip_tags (default: script, style, noscript,
+   template). For web
    sources with ``clean: main-content``, also keep only ``<main>`` (or the
    top-level ``<article>`` elements) when there is one, remove ``<nav>`` and
    ``<aside>``, ``<header>`` and ``<footer>`` outside ``<main>``,
@@ -35,9 +36,9 @@ spec/deviations.md. Steps, in order:
    ``_files`` folder) are copied into ``media/`` and the link points there.
    For a fetched page, images that ``fetch`` downloaded (decision F16) are
    copied the same way. Other web images stay web links: conversion never
-   uses the network. Missing
-   images, and local paths outside the HTML file's folder, keep their
-   original link and get a warning, so V7 still sees them.
+   uses the network. Missing images, and local paths outside the HTML
+   file's folder, keep their original link and get a warning, so V7 still
+   sees them (decisions I2, Q5).
 
 BeautifulSoup is used with lxml, which reads the page by the HTML rules a
 browser applies (a new <td> closes the previous one, and so on), so old pages
@@ -58,6 +59,8 @@ from urllib.parse import unquote, urldefrag, urljoin, urlsplit
 from bs4 import BeautifulSoup, Comment
 
 FLAG_SELF_URL_UNKNOWN = "self_url_unknown"
+# The comment browsers add to saved pages: <!-- saved from url=(0042)https://… -->;
+# the number is the URL's length. Group 1 is the URL.
 _SAVED_FROM = re.compile(r"saved from url=\(\d+\)(\S+)", re.IGNORECASE)
 _INDEX_PAGES = ("index.html", "index.htm")
 # HTML5 elements whose id Pandoc's HTML reader drops (checked with Pandoc 3.14).
@@ -66,12 +69,16 @@ ID_LOSING_TAGS = ("nav", "article", "footer", "details")
 
 @dataclass
 class OwnUrl:
+    """A URL that is the document itself, and where it was found."""
+
     url: str
     origin: str  # "sources.yaml", "final URL", "saved-from comment", "canonical link", "self_urls"
 
 
 @dataclass
 class PreparedHtml:
+    """The prepared HTML plus counts and warnings for conversion.json."""
+
     html: str
     removed: dict[str, int] = field(default_factory=dict)  # tag -> elements removed
     original_encoding: str | None = None
@@ -118,7 +125,11 @@ class PreparedHtml:
 
 
 def _normalize(url: str) -> tuple[str, str, str]:
-    """Address key ignoring scheme, fragment and a trailing index.html."""
+    """Address key ignoring scheme, fragment and a trailing index.html.
+
+    The key is (host[:port], path, query). Ports 80 and 443 are dropped so that
+    http and https addresses of the same page compare equal.
+    """
     parts = urlsplit(url)
     host = (parts.hostname or "").lower()
     if parts.port and parts.port not in (80, 443):
@@ -131,12 +142,16 @@ def _normalize(url: str) -> tuple[str, str, str]:
 
 
 def _is_web_url(url: str) -> bool:
+    """True for http and https URLs."""
     return urlsplit(url).scheme in ("http", "https")
 
 
 def find_own_urls(soup: BeautifulSoup, known: Iterable[OwnUrl]) -> list[OwnUrl]:
     """Own URLs in the design's order: known (sources.yaml / config), saved-from
-    comment, canonical link. Duplicates (same address) are dropped."""
+    comment, canonical link. Duplicates (same address) are dropped.
+
+    Only the first saved-from comment and the first canonical link count.
+    """
     found = [u for u in known if _is_web_url(u.url)]
     for comment in soup.find_all(string=lambda s: isinstance(s, Comment)):
         match = _SAVED_FROM.search(str(comment))
@@ -158,7 +173,11 @@ def find_own_urls(soup: BeautifulSoup, known: Iterable[OwnUrl]) -> list[OwnUrl]:
 
 
 def rewrite_self_links(soup: BeautifulSoup, own_urls: list[OwnUrl]) -> int:
-    """Rewrite links to the own URL with a fragment into '#fragment'. Returns the count."""
+    """Rewrite links to the own URL with a fragment into '#fragment'. Returns the count.
+
+    Relative links are resolved against <base href>, else the first own URL. A link
+    to the own URL without a fragment is left alone (deviation S1).
+    """
     own_keys = {_normalize(u.url) for u in own_urls}
     base_tag = soup.find("base", href=True)
     base = base_tag["href"] if base_tag is not None else own_urls[0].url
@@ -176,6 +195,10 @@ def rewrite_self_links(soup: BeautifulSoup, own_urls: list[OwnUrl]) -> int:
 
 
 def has_possible_self_links(soup: BeautifulSoup) -> bool:
+    """True when any link is a full http(s) URL with a fragment (deviation S2).
+
+    Used only when no own URL is known, to decide whether to warn.
+    """
     for a in soup.find_all(["a", "area"], href=True):
         parts = urlsplit(a["href"].strip())
         if parts.scheme in ("http", "https") and parts.fragment:
@@ -186,7 +209,10 @@ def has_possible_self_links(soup: BeautifulSoup) -> bool:
 def keep_targeted_ids(soup: BeautifulSoup) -> int:
     """Move targeted ids off elements whose id Pandoc drops (nav, article, footer,
     details) onto an empty <a id> at the start of the element, which Pandoc keeps.
-    Returns the number of ids moved."""
+    Returns the number of ids moved (deviation Q12).
+
+    Must run after rewrite_self_links, so former full-URL self links count as targets.
+    """
     targeted = {
         a["href"][1:] for a in soup.find_all(["a", "area"], href=True) if a["href"].startswith("#")
     }
@@ -204,13 +230,18 @@ def keep_targeted_ids(soup: BeautifulSoup) -> int:
 # --------------------------------------------------- main-content cleanup
 
 PAGE_CHROME_ALWAYS = ("nav", "aside")
-PAGE_CHROME_OUTSIDE_CONTENT = ("header", "footer")  # kept inside CONTENT_TAGS
+# Kept inside CONTENT_TAGS: a section's own header or footer is content, not page chrome.
+PAGE_CHROME_OUTSIDE_CONTENT = ("header", "footer")
 CONTENT_TAGS = ["main", "article", "section"]
 
 
 def clean_main_content(soup: BeautifulSoup, drop_selectors: Iterable[str]) -> dict[str, object]:
     """clean: main-content (design: HTML cleanup before conversion). Returns what was
-    kept and removed, for conversion.json."""
+    kept and removed, for conversion.json.
+
+    Keeps the first <main>, else every top-level <article>; with neither, the whole
+    body is kept and only the chrome below is removed (deviation F7).
+    """
     container = soup.body or soup
     main = soup.find("main")
     keep = (
@@ -228,6 +259,9 @@ def clean_main_content(soup: BeautifulSoup, drop_selectors: Iterable[str]) -> di
     removed: dict[str, int] = {}
 
     def drop(elements: list, label: str) -> None:
+        """Remove elements and count them under label."""
+        # An element may already be gone with an ancestor removed just before it (e.g. a
+        # selector that matches both an element and its child).
         elements = [e for e in elements if not e.decomposed]
         if elements:
             removed[label] = removed.get(label, 0) + len(elements)
@@ -247,6 +281,7 @@ def clean_main_content(soup: BeautifulSoup, drop_selectors: Iterable[str]) -> di
 
 # --------------------------------------------------------- absolute links
 
+# Which attribute holds the URL on each element that absolutize_links fixes (F8).
 URL_ATTRIBUTES = {
     "a": "href",
     "area": "href",
@@ -277,7 +312,10 @@ def image_key(url: str) -> str:
 
 def page_image_urls(soup: BeautifulSoup, page_url: str) -> list[str]:
     """Absolute http(s) URLs of the page's <img src> images, once each, in page order.
-    fetch downloads these; prepare_html resolves them the same way."""
+    fetch downloads these; prepare_html resolves them the same way.
+
+    data: URLs are skipped; they hold the image itself.
+    """
     base = base_url(soup, page_url)
     urls: list[str] = []
     for img in soup.find_all("img", src=True):
@@ -307,6 +345,7 @@ def absolutize_links(soup: BeautifulSoup, page_url: str) -> int:
 
 
 def text_chars(soup: BeautifulSoup) -> int:
+    """Non-whitespace characters of the body text, for the near-empty page check (F9)."""
     root = soup.body or soup
     return sum(1 for ch in root.get_text() if not ch.isspace())
 
@@ -315,6 +354,7 @@ def text_chars(soup: BeautifulSoup) -> int:
 
 
 def _own_cells(table) -> list:
+    """Cells of this table only, not of tables nested inside it."""
     return [c for c in table.find_all(["td", "th"]) if c.find_parent("table") is table]
 
 
@@ -333,6 +373,8 @@ def unwrap_single_cell_tables(soup: BeautifulSoup) -> int:
         caption = next(
             (c for c in table.find_all("caption") if c.find_parent("table") is table), None
         )
+        # Collect ids from the table, the rows/sections between it and the cell, the
+        # cell and the caption, so links to any of them keep working.
         ids: list[str] = []
         for element in (table, *_between(table, cell), cell, caption):
             if element is not None and element.get("id") and element["id"] not in ids:
@@ -356,7 +398,10 @@ def unwrap_single_cell_tables(soup: BeautifulSoup) -> int:
 
 def code_in_pre(soup: BeautifulSoup) -> int:
     """Put a <code> around the contents of each <pre> that is not already just
-    one <code>. Returns the number of <pre> elements changed."""
+    one <code>. Returns the number of <pre> elements changed (deviation Q15).
+
+    Whitespace-only text around a single <code> is ignored when deciding.
+    """
     changed = 0
     for pre in soup.find_all("pre"):
         children = [c for c in pre.contents if not (isinstance(c, str) and not c.strip())]
@@ -371,6 +416,7 @@ def code_in_pre(soup: BeautifulSoup) -> int:
 
 
 def _between(table, cell) -> list:
+    """Elements between the cell and its table, innermost first (tr, tbody, ...)."""
     out = []
     for parent in cell.parents:
         if parent is table:
@@ -383,6 +429,7 @@ def _between(table, cell) -> list:
 
 
 def unique_name(name: str, taken: set[str]) -> str:
+    """name, or name-2.ext, name-3.ext, ... if taken. Does not add it to taken."""
     if name not in taken:
         return name
     stem, dot, ext = name.rpartition(".")
@@ -397,6 +444,11 @@ def unique_name(name: str, taken: set[str]) -> str:
 
 
 def safe_name(name: str) -> str:
+    """A file name with only letters, digits, '.', '_' and '-' (deviation Q5).
+
+    Runs of other characters become '-'. Leading and trailing '-' and '.' are
+    removed, so the name has no path separator, cannot be '..' and is not hidden.
+    """
     cleaned = re.sub(r"[^A-Za-z0-9._-]+", "-", name).strip("-.")
     return cleaned or "image"
 
@@ -419,6 +471,7 @@ def handle_images(
         if not src or src.startswith("data:"):
             continue
         parts = urlsplit(src)
+        # "//host/x.png" is a protocol-relative web URL, not a local path.
         if parts.scheme in ("http", "https") or src.startswith("//"):
             local = downloaded.get(image_key(src))
             if local is None:
@@ -441,6 +494,8 @@ def handle_images(
                     f"image {src!r}: cannot be resolved to a local file; link kept"
                 )
                 continue
+            # Security: only files inside the HTML file's folder are copied. resolve()
+            # follows symlinks and "..", so neither can reach a file outside it (Q5).
             resolved = path.resolve()
             if root is None or not resolved.is_relative_to(root):
                 result.images_missing.append(src)
@@ -485,9 +540,12 @@ def prepare_html(
     their clean mode and drop_selectors, and the images fetch downloaded
     (image_key(URL) -> file).
     """
+    # lxml reads the page as a browser would (deviation HP1). from_encoding=None lets
+    # BeautifulSoup detect it from a BOM or <meta charset>.
     soup = BeautifulSoup(data, "lxml", from_encoding=encoding)
     result = PreparedHtml(html="", original_encoding=soup.original_encoding)
 
+    # The order of the steps below matters; see the module docstring.
     result.own_urls = find_own_urls(soup, known_urls)
 
     for tag in strip_tags:
@@ -500,6 +558,8 @@ def prepare_html(
         result.main_content = clean_main_content(soup, drop_selectors)
     if page_url is not None:
         result.links_made_absolute = absolutize_links(soup, page_url)
+    # After clean_main_content, which looks for <main>. Pandoc would drop everything
+    # outside a <main> (deviation F10).
     for main in soup.find_all("main"):
         main.name = "div"
         result.main_renamed += 1
@@ -514,6 +574,7 @@ def prepare_html(
         )
 
     result.ids_moved_to_anchors = keep_targeted_ids(soup)
+    # Unwrap first: the <pre> that was inside a one-cell table must also get its <code>.
     result.tables_unwrapped = unwrap_single_cell_tables(soup)
     result.pre_given_code = code_in_pre(soup)
     handle_images(

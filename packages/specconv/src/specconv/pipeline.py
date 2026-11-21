@@ -14,8 +14,8 @@ document, in the manifest and the log).
 
 Incremental runs (design: Incremental runs): a document is skipped and
 marked skipped_unchanged when its source SHA-256, converter version and
-options hash match the previous manifest entry and its output exists.
---force converts everything again.
+options hash match the previous manifest entry and its output exists
+(deviation Q9). --force converts everything again.
 
 Web sources (design: Web sources) are converted from the fetch cache in
 work/fetched/; a source that is not cached yet is fetched first. Their
@@ -57,18 +57,23 @@ from specconv.textlayer import FLAG_MIXED, PdfReadError, TextLayer, check_text_l
 
 log = logging.getLogger("specconv.pipeline")
 
-RECIPE_VERSION = 9  # bump when HTML preparation, filters or post-processing change
+# Bump when HTML preparation, filters or post-processing change. It is part of the
+# options hash, so every document is converted again on the next run (deviation Q9).
+RECIPE_VERSION = 9
 FAILED_STATUSES = frozenset({"failed", "no_text_layer"})
+# Only documents that converted fine can be skipped; failed ones are always retried.
 SKIPPABLE_STATUSES = frozenset({"ok", "skipped_unchanged"})
 SUSPECT_EMPTY_CHARS = 500  # design: page that renders empty
 FLAG_SUSPECT_EMPTY = "suspect_empty"
 
 
 def utc_now() -> str:
+    """Current UTC time as ISO 8601 with a Z, to the second."""
     return dt.datetime.now(dt.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def sha256_file(path: Path) -> str:
+    """SHA-256 of a file, read in 1 MiB blocks so large PDFs need little memory."""
     digest = hashlib.sha256()
     with path.open("rb") as fh:
         for block in iter(lambda: fh.read(1 << 20), b""):
@@ -77,17 +82,21 @@ def sha256_file(path: Path) -> str:
 
 
 def options_hash(options: dict[str, Any]) -> str:
+    """Short, stable hash of the options; keys are sorted so dict order does not matter."""
     blob = json.dumps(options, sort_keys=True, ensure_ascii=True)
     return hashlib.sha256(blob.encode("ascii")).hexdigest()[:16]
 
 
 @dataclass
 class RunResult:
+    """The manifest after a run and the entries of the documents handled in it."""
+
     manifest: Manifest
     processed: list[ManifestEntry] = field(default_factory=list)
 
     @property
     def failed(self) -> list[ManifestEntry]:
+        """Entries that make the CLI exit with 1 (failed, no_text_layer; deviation P11)."""
         return [e for e in self.processed if e.status in FAILED_STATUSES]
 
 
@@ -102,6 +111,8 @@ class Prepared:
 
 
 class Pipeline:
+    """Converts documents one by one; converters are created once and reused."""
+
     def __init__(
         self,
         cfg: SpecconvConfig,
@@ -124,6 +135,7 @@ class Pipeline:
     # ----------------------------------------------------------- converters
 
     def pandoc(self, from_format: str) -> PandocConverter:
+        """The Pandoc converter for "html" or "docx", created on first use."""
         if from_format not in self._pandoc:
             self._pandoc[from_format] = PandocConverter(from_format)
         return self._pandoc[from_format]
@@ -158,6 +170,7 @@ class Pipeline:
             # A changed own URL changes which links are rewritten.
             options["self_url"] = self.cfg.self_url_for(doc.rel_path)
         if doc.source is not None:
+            # convert_one fetches web sources before calling this.
             fetched = self._fetched[doc.id].record
             options["source"] = {
                 "url": doc.source.url,
@@ -183,7 +196,10 @@ class Pipeline:
 
     def run(self, docs: list[InputDoc], full_run: bool) -> RunResult:
         """Convert docs. On a full run the manifest lists exactly these docs;
-        otherwise (--only) entries of other documents are kept."""
+        otherwise (--only) entries of other documents are kept (deviation P10).
+
+        The manifest is saved at the end, also when documents failed.
+        """
         result = RunResult(manifest=Manifest() if full_run else self.previous)
         for doc in docs:
             entry = self.convert_one(doc)
@@ -193,6 +209,7 @@ class Pipeline:
             log.log(
                 level, "%s: %s%s", doc.id, entry.status, f" ({entry.error})" if entry.error else ""
             )
+            # A skipped document's warnings were already logged when it was converted.
             if entry.status != "skipped_unchanged":
                 for warning in entry.warnings:
                     log.warning("%s: %s", doc.id, warning)
@@ -208,6 +225,12 @@ class Pipeline:
         return result
 
     def convert_one(self, doc: InputDoc) -> ManifestEntry:
+        """Convert one document and return its manifest entry. Never raises.
+
+        Every error becomes a "failed" entry so the other documents still run. A web
+        source is fetched first (or taken from the cache); from then on it is
+        handled like a local HTML file.
+        """
         r = route(doc)
         base: dict[str, Any] = dict(
             id=doc.id, source=doc.display_source, source_type=doc.source_type, route=r.name
@@ -226,6 +249,7 @@ class Pipeline:
             if doc.source is not None:
                 outcome = fetch_source(doc.source, self.cfg.fetch, self.work)
                 self._fetched[doc.id] = outcome
+                # From here on the cached page is the document's file.
                 doc = dataclasses.replace(doc, path=outcome.html_path)
             assert doc.path is not None
             source_sha = sha256_file(doc.path)
@@ -259,6 +283,7 @@ class Pipeline:
                 duration_s=round(time.monotonic() - start, 3),
             )
         finally:
+            # Leftovers of a failed build; after success the folder was already moved.
             shutil.rmtree(self._tmp_dir(doc.id), ignore_errors=True)
 
     # --------------------------------------------------------- incremental
@@ -266,6 +291,10 @@ class Pipeline:
     def _skip_if_unchanged(
         self, doc: InputDoc, source_sha: str, version: str, options: dict[str, Any]
     ) -> ManifestEntry | None:
+        """The previous entry marked skipped_unchanged, or None if it must be converted.
+
+        Also converts again when the source path changed or the output file is gone.
+        """
         if self.force:
             return None
         prev = self.previous.get(doc.id)
@@ -284,15 +313,22 @@ class Pipeline:
     # -------------------------------------------------------------- routes
 
     def _tmp_dir(self, doc_id: str) -> Path:
+        """Hidden build folder next to the final one (same file system, so rename works)."""
         return self.output / f".{doc_id}.tmp"
 
     def _new_tmp(self, doc_id: str) -> Path:
+        """Empty build folder; leftovers of an interrupted run are removed first."""
         tmp = self._tmp_dir(doc_id)
         shutil.rmtree(tmp, ignore_errors=True)
         tmp.mkdir(parents=True)
         return tmp
 
     def _run_pandoc(self, doc: InputDoc, r: Route) -> Prepared:
+        """Prepare HTML if needed, run Pandoc, and collect flags and warnings.
+
+        Pandoc reads the prepared copy in work/<id>/prepared.html, never the
+        original; the original is still what source.<ext> keeps.
+        """
         assert doc.path is not None and r.from_format is not None
         tmp = self._new_tmp(doc.id)
         prepared: PreparedHtml | None = None
@@ -336,6 +372,11 @@ class Pipeline:
         version: str,
         options: dict[str, Any],
     ) -> ManifestEntry:
+        """Check the text layer, then convert with Docling.
+
+        A PDF below min_text_page_ratio gets status no_text_layer and no output folder
+        is written (deviation Q10). Damaged PDFs raise PdfReadError (a failed entry).
+        """
         assert doc.path is not None
         start = time.monotonic()
         layer: TextLayer = check_text_layer(doc.path, self.cfg.pdf)
@@ -389,13 +430,18 @@ class Pipeline:
         options: dict[str, Any],
         prepared: Prepared,
     ) -> ManifestEntry:
-        """Shared steps: post-process, front matter, files, swap, manifest entry."""
+        """Shared steps: post-process, front matter, files, swap, manifest entry.
+
+        Everything is written into the build folder first; the previous output is
+        replaced only at the end (deviation P9).
+        """
         assert doc.path is not None
         start = time.monotonic()
         result = prepared.result
         tmp = self._tmp_dir(doc.id)
         final_dir = self.output / doc.id
         md_name = f"{doc.id}.md"
+        # Read now: raises before any work if the old front matter is unreadable (P7).
         previous = read_previous(final_dir / md_name)
 
         warnings = list(prepared.warnings)
@@ -464,7 +510,11 @@ class Pipeline:
         )
 
     def _prepare_html(self, doc: InputDoc, tmp: Path) -> PreparedHtml:
-        """Clean the HTML, rewrite self-links and copy local images into tmp/media."""
+        """Clean the HTML, rewrite self-links and copy local images into tmp/media.
+
+        Web sources pass their URLs, encoding, clean mode and downloaded images;
+        local files pass their configured self_url, if any.
+        """
         assert doc.path is not None
         known: list[OwnUrl] = []
         web: dict[str, Any] = {}
@@ -506,17 +556,23 @@ class Pipeline:
 
 
 def _page_list(pages: list[int], limit: int = 20) -> str:
+    """Page numbers as "1, 2, 3", cut after limit with a count of the rest."""
     shown = ", ".join(map(str, pages[:limit]))
     return shown + (f" … ({len(pages) - limit} more)" if len(pages) > limit else "")
 
 
 def _with_meta(meta: dict[str, Any], body: str) -> bytes:
+    """A section file: YAML front matter, then the body, as UTF-8."""
     head = yaml.safe_dump(meta, sort_keys=False, allow_unicode=True)
     return f"---\n{head}---\n{body}".encode()
 
 
 def _write_sections(tmp: Path, doc_id: str, md_name: str, markdown: str, level: int):
-    """sections/<file>.md per section and sections/index.md (design: --split)."""
+    """sections/<file>.md per section and sections/index.md (design: --split).
+
+    Front matter fields are listed in deviation SP3. Returns the summary for
+    conversion.json.
+    """
     result = split_sections(markdown, level)
     folder = tmp / "sections"
     folder.mkdir()
@@ -538,6 +594,11 @@ def _write_sections(tmp: Path, doc_id: str, md_name: str, markdown: str, level: 
 
 
 def _swap_into_place(tmp: Path, final_dir: Path) -> None:
+    """Replace final_dir with tmp, keeping the old folder until the new one is in place.
+
+    Two renames, not one atomic step: if the process dies between them, the old
+    output is left in .<id>.old until the next successful swap of that document.
+    """
     old = final_dir.with_name(f".{final_dir.name}.old")
     shutil.rmtree(old, ignore_errors=True)
     if final_dir.exists():

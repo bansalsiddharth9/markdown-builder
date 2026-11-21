@@ -18,6 +18,8 @@ from pathlib import Path
 
 @dataclass(frozen=True)
 class PinnedModel:
+    """One Hugging Face model repository fixed to a commit."""
+
     repo_id: str
     revision: str  # full commit id
     license: str
@@ -25,6 +27,7 @@ class PinnedModel:
 
     @property
     def folder(self) -> str:
+        """Folder name inside models_path, in Docling's ``owner--repo`` style."""
         return self.repo_id.replace("/", "--")
 
 
@@ -50,6 +53,7 @@ def missing_models(models_path: Path) -> list[PinnedModel]:
     """Models that are absent or were downloaded at a different revision."""
     missing = []
     for model in PINNED_MODELS:
+        # The marker is written last, so a half-finished download counts as missing.
         marker = models_path / model.folder / REVISION_FILE
         if not marker.is_file() or marker.read_text(encoding="utf-8").strip() != model.revision:
             missing.append(model)
@@ -57,12 +61,16 @@ def missing_models(models_path: Path) -> list[PinnedModel]:
 
 
 def download_models(models_path: Path, force: bool = False) -> list[PinnedModel]:
-    """Download every pinned model that is missing (or all with force). Needs network."""
+    """Download every pinned model that is missing (or all with force). Needs network.
+
+    Returns the models that were downloaded.
+    """
     from huggingface_hub import snapshot_download
 
     todo = list(PINNED_MODELS) if force else missing_models(models_path)
     for model in todo:
         target = models_path / model.folder
         snapshot_download(repo_id=model.repo_id, revision=model.revision, local_dir=target)
+        # Write the marker only after a complete download (see missing_models).
         (target / REVISION_FILE).write_text(model.revision + "\n", encoding="utf-8")
     return todo

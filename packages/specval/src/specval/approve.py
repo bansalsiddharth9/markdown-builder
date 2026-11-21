@@ -34,6 +34,13 @@ def approve(
     by: str | None = None,
     today: str | None = None,
 ) -> str:
+    """Approve one document and return a one-line message for the user.
+
+    Raises ApproveError when approval is refused (see module docstring); the
+    CLI turns that into exit code 1. ``today`` (ISO date) is for tests; it
+    defaults to the local date. The Markdown is rewritten atomically, with
+    the body unchanged.
+    """
     report_path = validation / f"{doc_id}.json"
     try:
         report = json.loads(report_path.read_text(encoding="utf-8"))
@@ -45,6 +52,8 @@ def approve(
         raise ApproveError(f"{doc_id} was not converted; there is nothing to approve")
     md_path = output / doc_id / f"{doc_id}.md"
     data = md_path.read_bytes()
+    # Body only, so front matter edits (title, spec_version) after validation
+    # do not block approval (deviation WB11).
     if body_sha256(data.decode("utf-8")) != report.get("markdown_body_sha256"):
         raise ApproveError(
             f"{md_path} changed since it was validated ({report.get('validated_at')}); "
@@ -63,6 +72,7 @@ def approve(
         )
     today = today or dt.date.today().isoformat()
     fm, body = parse_document(data.decode("utf-8"))
+    # Mapping instead of the design's free string, to record who (deviation D2).
     fm.validated = {"date": today, "validator": f"specval {__version__}", "by": by}
     if override:
         fm.manual_fixes = [
@@ -75,6 +85,7 @@ def approve(
                 "fail_findings": fails,
             },
         ]
+    # Temp file and rename: a crash never leaves a half-written Markdown file.
     tmp = md_path.with_name(f".{md_path.name}.tmp")
     tmp.write_bytes(render_document(fm, body).encode("utf-8"))
     os.replace(tmp, md_path)

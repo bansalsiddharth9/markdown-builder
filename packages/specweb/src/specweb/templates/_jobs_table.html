@@ -1,3 +1,9 @@
+{#- Jobs table fragment: included by jobs.html, and served alone by GET /jobs/table
+    (app.jobs_table) for HTMX polling. Same context as jobs.html (minus message).
+    While any job is queued or running, HTMX fetches /jobs/table every 2 s and
+    replaces this whole div (outerHTML) with the answer. The answer has no
+    hx-get once all jobs are finished, so the polling stops by itself.
+    The current status filter is passed on, so polling keeps the filter. -#}
 {% from "_macros.html" import pill %}
 <div id="jobs-table"
      {% if any_running %}hx-get="/jobs/table{% if status %}?status={{ status }}{% endif %}" hx-trigger="every 2s" hx-swap="outerHTML"{% endif %}>

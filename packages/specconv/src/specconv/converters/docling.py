@@ -38,24 +38,30 @@ from typing import Any
 from specconv.converters.base import MEDIA_DIR, ConversionError, ConversionResult
 from specconv.models import PINNED_MODELS, missing_models
 
-IMAGES_SCALE = 2.0  # picture images rendered at 144 dpi (Docling's default 1.0 is 72 dpi)
+IMAGES_SCALE = 2.0  # picture images rendered at 144 dpi (Docling's default 1.0 is 72 dpi; Q7)
 
 
 def is_document_index(item: Any) -> bool:
     """A table Docling labels as a document index (contents list)."""
+    # label is an enum in Docling, but a plain string also works.
     return getattr(item.label, "value", item.label) == "document_index"
 
 
 def table_has_spans(item: Any) -> bool:
+    """True when any cell spans more than one row or column (merged cells)."""
     return any(c.row_span > 1 or c.col_span > 1 for c in item.data.table_cells)
 
 
+# Characters that could start Markdown or HTML markup in an index entry.
 _MD_SPECIAL = re.compile(r"([\\`*_\[\]<>])")
 
 
 def index_as_list(item: Any) -> str:
     """A document index (contents list) as a Markdown bullet list: the cells of
-    each row joined by a space, Markdown characters escaped."""
+    each row joined by a space, Markdown characters escaped (deviation Q20).
+
+    Empty rows are left out. A cell spanning several rows appears only in its first row.
+    """
     rows: dict[int, list[tuple[int, str]]] = {}
     for cell in item.data.table_cells:
         text = " ".join(cell.text.split())
@@ -76,7 +82,14 @@ def _span_aware_table_serializer() -> Any:
     from docling_core.transforms.serializer.markdown import MarkdownTableSerializer
 
     class SpanAwareTableSerializer(MarkdownTableSerializer):
+        """Docling's Markdown table serializer with two special cases (see module doc)."""
+
         def serialize(self, *, item, doc_serializer, doc, **kwargs) -> SerializationResult:
+            """Index -> bullet list; merged cells -> HTML; anything else -> Docling's default.
+
+            Nested and excluded tables always go to the default serializer, which
+            already handles them.
+            """
             nested = kwargs.get("_nested_in_table")
             excluded = item.self_ref in doc_serializer.get_excluded_refs(**kwargs)
             if not nested and not excluded and is_document_index(item):
@@ -102,6 +115,8 @@ def _span_aware_table_serializer() -> Any:
 def _formula_text_serializer() -> Any:
     """Markdown text serializer that writes undecoded formulas as their original
     text in a code block (inline: code span) instead of a placeholder comment."""
+    # _code_block and _code_span are private Docling helpers; they choose a fence or
+    # backtick run long enough for the text. Check them when upgrading Docling.
     from docling_core.transforms.serializer.common import create_ser_result
     from docling_core.transforms.serializer.markdown import (
         MarkdownTextSerializer,
@@ -111,7 +126,10 @@ def _formula_text_serializer() -> Any:
     from docling_core.types.doc import FormulaItem
 
     class FormulaAsTextSerializer(MarkdownTextSerializer):
+        """Docling's text serializer, except for formulas it could not decode."""
+
         def serialize(self, *, item, doc_serializer, doc, is_inline_scope=False, **kwargs):
+            """Write an undecoded formula (no text, but PDF text in orig) as code (Q18)."""
             if isinstance(item, FormulaItem) and not item.text and item.orig:
                 if item.self_ref in doc_serializer.get_excluded_refs(**kwargs):
                     return create_ser_result()
@@ -137,6 +155,7 @@ class _WarningCollector(logging.Handler):
         self.messages: list[str] = []
 
     def emit(self, record: logging.LogRecord) -> None:
+        """Keep a warning from Docling code; duplicates are dropped."""
         # Docling's packages use loggers named after modules ("docling.…") and
         # after bare class names ("MatchingPostProcessor"); match by source file.
         if record.levelno < logging.WARNING:
@@ -152,7 +171,7 @@ class _WarningCollector(logging.Handler):
 
 
 def _furniture_texts(doc: Any) -> list[dict[str, object]]:
-    """Texts Docling left out of the body as page headers or footers."""
+    """Texts Docling left out of the body as page headers or footers (deviation Q8)."""
     out = []
     for item in doc.texts:
         if getattr(item.content_layer, "value", item.content_layer) == "furniture":
@@ -167,6 +186,10 @@ class DoclingConverter:
     name = "docling"
 
     def __init__(self, models_path: Path) -> None:
+        """Check the pinned models are present; raises ConversionError if not.
+
+        Docling itself is loaded later, on the first conversion.
+        """
         missing = missing_models(models_path)
         if missing:
             raise ConversionError(
@@ -177,6 +200,7 @@ class DoclingConverter:
         self._converter: Any = None
 
     def version(self) -> str:
+        """Installed Docling version."""
         return dist_version("docling")
 
     @classmethod
@@ -197,8 +221,13 @@ class DoclingConverter:
         }
 
     def _get_converter(self) -> Any:
+        """Create the DocumentConverter on first use and reuse it (models load slowly).
+
+        The settings here must match options().
+        """
         if self._converter is None:
-            # Never download anything: the pinned models are already local.
+            # Never download anything: the pinned models are already local (E8).
+            # Set before the Docling imports below, as huggingface_hub reads it on import.
             os.environ["HF_HUB_OFFLINE"] = "1"
             from docling.datamodel.base_models import InputFormat
             from docling.datamodel.pipeline_options import PdfPipelineOptions, TableFormerMode
@@ -217,6 +246,13 @@ class DoclingConverter:
         return self._converter
 
     def convert(self, src: Path, out_dir: Path, json_path: Path | None = None) -> ConversionResult:
+        """Convert a PDF; pictures go to out_dir/media.
+
+        Raises ConversionError when Docling raises or reports failure. A partial
+        success is accepted with a warning. Docling's log warnings for this run are
+        added to the result's warnings (deviation Q13). json_path, if given, gets
+        the Docling document as JSON, without image data.
+        """
         from docling.datamodel.base_models import ConversionStatus
         from docling_core.transforms.serializer.markdown import (
             MarkdownDocSerializer,
@@ -231,6 +267,7 @@ class DoclingConverter:
         docling_log = logging.getLogger()  # root: records from every Docling logger propagate
         docling_log.addHandler(collector)
         try:
+            # raises_on_error=False: failures come back in res.status and res.errors.
             res = converter.convert(src, raises_on_error=False)
         except Exception as exc:  # Docling raises various types for unreadable input
             raise ConversionError(f"docling failed: {type(exc).__name__}: {exc}") from exc

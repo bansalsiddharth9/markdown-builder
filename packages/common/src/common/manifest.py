@@ -12,6 +12,8 @@ from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 from typing import Any
 
+# Bump when the format changes in a way old readers cannot handle; readers
+# refuse any other version.
 SCHEMA_VERSION = 1
 
 STATUSES = frozenset({"ok", "failed", "no_text_layer", "unsupported", "skipped_unchanged"})
@@ -30,7 +32,7 @@ class ManifestEntry:
     source: str  # path relative to the input folder, or the URL for web sources
     source_type: str  # pdf | html | docx | web | doc (not converted)
     status: str  # see STATUSES
-    source_sha256: str | None = None
+    source_sha256: str | None = None  # of the input file (or fetched page)
     route: str | None = None  # e.g. "pandoc:html", "docling", "none:no_text_layer"
     converter: str | None = None  # e.g. "docling"
     converter_version: str | None = None
@@ -43,6 +45,7 @@ class ManifestEntry:
     duration_s: float | None = None
 
     def __post_init__(self) -> None:
+        """Reject an empty id, unknown status or unknown source_type."""
         if not self.id:
             raise ManifestError("manifest entry has an empty id")
         if self.status not in STATUSES:
@@ -58,6 +61,7 @@ class ManifestEntry:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> ManifestEntry:
+        """Build an entry from JSON; unknown or missing fields raise ManifestError."""
         known = {f.name for f in fields(cls)}
         unknown = set(data) - known
         if unknown:
@@ -78,6 +82,7 @@ class Manifest:
     schema_version: int = SCHEMA_VERSION
 
     def get(self, doc_id: str) -> ManifestEntry | None:
+        """The entry with this id, or None."""
         for entry in self.entries:
             if entry.id == doc_id:
                 return entry
@@ -92,6 +97,7 @@ class Manifest:
         self.entries.append(entry)
 
     def to_dict(self) -> dict[str, Any]:
+        """JSON form. Entries are sorted by id so the file is stable across runs."""
         return {
             "schema_version": self.schema_version,
             "generator": self.generator,
@@ -101,6 +107,7 @@ class Manifest:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> Manifest:
+        """Build a manifest from parsed JSON, checking schema version and unique ids."""
         if not isinstance(data, dict):
             raise ManifestError("manifest must be a JSON object")
         version = data.get("schema_version")
@@ -137,6 +144,6 @@ def write_manifest(manifest: Manifest, path: Path) -> None:
     """Write the manifest atomically (temp file, then rename)."""
     path.parent.mkdir(parents=True, exist_ok=True)
     text = json.dumps(manifest.to_dict(), indent=2, ensure_ascii=False, sort_keys=False) + "\n"
-    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp = path.with_suffix(path.suffix + ".tmp")  # manifest.json.tmp, same folder
     tmp.write_text(text, encoding="utf-8")
     tmp.replace(path)

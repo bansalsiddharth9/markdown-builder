@@ -1,7 +1,8 @@
 """Download the web pages listed in sources.yaml (design: Web sources).
 
 - ``render: static`` uses httpx: redirects followed, ``fetch.timeout_s``,
-  ``fetch.retries`` retries on network errors, timeouts, HTTP 429 and 5xx.
+  ``fetch.retries`` retries on network errors, timeouts and HTTP 408, 425,
+  429, 500, 502, 503, 504 (deviation F3).
 - ``render: browser`` loads the page in Playwright Chromium, waits for network
   idle and saves ``page.content()`` (UTF-8). Same timeout and retries.
 
@@ -20,6 +21,10 @@ image that cannot be downloaded does not fail the fetch: it is listed under
 Only HTTP 200 with an HTML content type counts as success. A failed fetch
 never replaces a good cached copy; the cache is written atomically, sidecar
 last, so a half-written fetch is never mistaken for a complete one.
+
+With ``fetch.block_private_addresses`` (the web app sets it), every request is
+checked by HostGuard first, so a URL cannot be used to reach internal hosts
+(deviation F17).
 """
 
 from __future__ import annotations
@@ -48,7 +53,7 @@ FETCHED_DIR = "fetched"
 RETRY_BACKOFF_S = 1.0  # first wait between attempts; doubles each time
 RETRYABLE_STATUS = frozenset({408, 425, 429, 500, 502, 503, 504})
 HTML_TYPES = ("text/html", "application/xhtml+xml")
-MAX_IMAGE_BYTES = 50 * 1024 * 1024
+MAX_IMAGE_BYTES = 50 * 1024 * 1024  # larger images are not downloaded (stops huge or endless files)
 
 
 class FetchError(RuntimeError):
@@ -65,19 +70,28 @@ class HostGuard:
     before every request: the page, each redirect hop, every image."""
 
     def __init__(self, allow_hosts=(), resolver=None) -> None:
+        """allow_hosts are host names never checked; resolver is replaceable for tests."""
         self.allow = {h.lower() for h in allow_hosts}
         self.resolver = resolver or _resolve
 
     def check(self, url: str) -> None:
+        """Raise BlockedAddress if the URL's host is, or resolves to, a non-global address.
+
+        Every address the name resolves to must be global, not just one. The check
+        resolves the name itself; the HTTP client resolves it again when it
+        connects, so a DNS answer that changes in between is not caught.
+        """
         host = (urlsplit(url).hostname or "").lower()
         if not host or host in self.allow:
             return
         try:
-            addresses = [str(ipaddress.ip_address(host))]
+            addresses = [str(ipaddress.ip_address(host))]  # host is a literal IP
         except ValueError:
             addresses = self.resolver(host)
         for address in addresses:
+            # Drop an IPv6 zone id ("fe80::1%eth0"); ip_address() rejects it.
             ip = ipaddress.ip_address(address.split("%")[0])
+            # "::ffff:127.0.0.1" is IPv4 loopback in disguise; judge the IPv4 address.
             if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
                 ip = ip.ipv4_mapped
             if not ip.is_global or ip.is_multicast:
@@ -88,6 +102,7 @@ class HostGuard:
 
 
 def _resolve(host: str) -> list[str]:
+    """All addresses a host name resolves to (IPv4 and IPv6), sorted."""
     try:
         return sorted({info[4][0] for info in socket.getaddrinfo(host, None)})
     except OSError:
@@ -95,10 +110,16 @@ def _resolve(host: str) -> list[str]:
 
 
 def guard_for(cfg: FetchConfig) -> HostGuard | None:
+    """A HostGuard when private addresses are blocked, else None (no checks)."""
     return HostGuard(cfg.allow_hosts) if cfg.block_private_addresses else None
 
 
 def _request_hook(cfg: FetchConfig) -> dict:
+    """httpx event_hooks that check every request, including each redirect hop.
+
+    httpx calls "request" hooks before sending each request it makes while following
+    redirects, so an internal redirect target is refused before it is contacted.
+    """
     guard = guard_for(cfg)
     if guard is None:
         return {}
@@ -134,6 +155,8 @@ class FetchRecord:
 
 @dataclass(frozen=True)
 class FetchOutcome:
+    """Result of fetch_source: the sidecar, the saved page, and whether it was cached."""
+
     record: FetchRecord
     html_path: Path
     from_cache: bool
@@ -141,6 +164,8 @@ class FetchOutcome:
 
 @dataclass(frozen=True)
 class _Page:
+    """A downloaded page before it is saved."""
+
     data: bytes
     final_url: str
     status: int
@@ -149,16 +174,22 @@ class _Page:
 
 
 def cache_paths(work: Path, source_id: str) -> tuple[Path, Path]:
+    """Paths of the saved page and its sidecar: (<id>.html, <id>.fetch.json)."""
     folder = work / FETCHED_DIR
     return folder / f"{source_id}.html", folder / f"{source_id}.fetch.json"
 
 
 def images_dir(work: Path, source_id: str) -> Path:
+    """Folder for the page's downloaded images, named like a browser-saved page's."""
     return work / FETCHED_DIR / f"{source_id}_files"
 
 
 def load_cached(work: Path, source: Source) -> FetchOutcome | None:
-    """The cached fetch for this source, or None if missing or stale."""
+    """The cached fetch for this source, or None if missing or stale (deviation F1).
+
+    Stale means: the sidecar is unreadable, the URL or render mode changed, or the
+    page or one of its images no longer matches the SHA-256 in the sidecar.
+    """
     html_path, meta_path = cache_paths(work, source.id)
     if not (html_path.is_file() and meta_path.is_file()):
         return None
@@ -189,7 +220,11 @@ def load_cached(work: Path, source: Source) -> FetchOutcome | None:
 def fetch_source(
     source: Source, cfg: FetchConfig, work: Path, refetch: bool = False
 ) -> FetchOutcome:
-    """Return the cached page, or download it. Raises FetchError."""
+    """Return the cached page, or download it. Raises FetchError.
+
+    Image download failures do not fail the fetch; they are listed in the sidecar.
+    On failure nothing in the cache is changed (deviation F4).
+    """
     if not refetch:
         cached = load_cached(work, source)
         if cached is not None:
@@ -201,6 +236,8 @@ def fetch_source(
     html_path, meta_path = cache_paths(work, source.id)
     html_path.parent.mkdir(parents=True, exist_ok=True)
     folder = images_dir(work, source.id)
+    # Images go to a hidden temporary folder first and replace the old ones only
+    # once the page itself is known to be good.
     tmp_images = folder.with_name(f".{folder.name}.tmp")
     shutil.rmtree(tmp_images, ignore_errors=True)
     images, failed = _download_images(source.id, page, cfg, tmp_images)
@@ -250,10 +287,11 @@ def _with_retries(label: str, cfg: FetchConfig, attempt_once):
             log.warning("%s: attempt %d of %d failed: %s; retrying", label, attempt, attempts, exc)
             time.sleep(wait)
             wait *= 2
-    raise AssertionError("unreachable")
+    raise AssertionError("unreachable")  # the loop always returns or raises
 
 
 def _check_page(page: _Page, url: str) -> None:
+    """Accept only HTTP 200 with an HTML content type (or none given) (deviation F2)."""
     if page.status != 200:
         raise FetchError(f"HTTP {page.status} for {url}")
     if page.content_type is not None:
@@ -266,6 +304,7 @@ def _check_page(page: _Page, url: str) -> None:
 
 
 def _status_error(status: int, url: str) -> FetchError:
+    """The error for a non-200 status: retryable for RETRYABLE_STATUS, final otherwise."""
     if status in RETRYABLE_STATUS:
         return _Retryable(f"HTTP {status} for {url}")
     return FetchError(f"HTTP {status} for {url}")
@@ -277,7 +316,11 @@ def _status_error(status: int, url: str) -> FetchError:
 def _download_images(
     source_id: str, page: _Page, cfg: FetchConfig, folder: Path
 ) -> tuple[list[dict], list[dict]]:
-    """Download the page's images into folder. Returns (downloaded, failed)."""
+    """Download the page's images into folder. Returns (downloaded, failed).
+
+    The folder is created only when at least one image downloads. Image URLs are
+    resolved against the page's final URL (after redirects).
+    """
     import httpx
     from bs4 import BeautifulSoup
 
@@ -296,6 +339,7 @@ def _download_images(
     ) as client:
         for url in urls:
             try:
+                # u=url binds the current URL; a plain closure would see the loop variable.
                 data, content_type = _with_retries(
                     f"{source_id}: image {url}", cfg, lambda u=url: _get_image(client, u, cfg)
                 )
@@ -327,6 +371,12 @@ def _download_images(
 
 
 def _get_image(client, url: str, cfg: FetchConfig) -> tuple[bytes, str | None]:
+    """Download one image. Returns (bytes, content type header).
+
+    Streamed, so a file larger than MAX_IMAGE_BYTES is stopped early instead of
+    being read into memory whole. An HTML answer (e.g. a login or error page)
+    is refused.
+    """
     import httpx
 
     try:
@@ -357,6 +407,8 @@ def _image_file_name(url: str, content_type: str | None) -> str:
     name = safe_name(unquote(urlsplit(url).path.rsplit("/", 1)[-1]))
     if "." not in name:
         mime = (content_type or "").split(";")[0].strip().lower()
+        # Fixed for the common types: guess_extension depends on the system's
+        # mime.types files and can give e.g. ".jpe".
         ext = {"image/svg+xml": ".svg", "image/jpeg": ".jpg"}.get(mime) or (
             mimetypes.guess_extension(mime) if mime else None
         )
@@ -368,6 +420,7 @@ def _image_file_name(url: str, content_type: str | None) -> str:
 
 
 def _fetch_static(url: str, cfg: FetchConfig) -> _Page:
+    """Download a page with httpx. Network errors, timeouts and some statuses are retryable."""
     import httpx
 
     try:
@@ -399,10 +452,17 @@ def _fetch_static(url: str, cfg: FetchConfig) -> _Page:
 
 
 def _fetch_browser(url: str, cfg: FetchConfig) -> _Page:
+    """Load a page in headless Chromium and save the DOM after network idle.
+
+    With address blocking on, every request the page makes (scripts, images,
+    redirects) goes through a route handler that checks it first.
+    """
     from playwright.sync_api import Error as PlaywrightError
     from playwright.sync_api import TimeoutError as PlaywrightTimeout
     from playwright.sync_api import sync_playwright
 
+    # Unlike deps.configure_browsers_path, this overrides an existing
+    # PLAYWRIGHT_BROWSERS_PATH.
     if cfg.browsers_path is not None:
         os.environ["PLAYWRIGHT_BROWSERS_PATH"] = str(cfg.browsers_path)
     guard = guard_for(cfg)
@@ -415,6 +475,7 @@ def _fetch_browser(url: str, cfg: FetchConfig) -> _Page:
         route handlers, so the request is made here without following
         redirects; a redirect target is checked before the browser follows it
         (and its request comes through here again)."""
+        # Only registered when guard is not None (see context.route below).
         request_url = request_route.request.url
         try:
             guard.check(request_url)
@@ -424,6 +485,7 @@ def _fetch_browser(url: str, cfg: FetchConfig) -> _Page:
                 guard.check(urljoin(request_url, location))
         except BlockedAddress as exc:
             blocked.append(str(exc))
+            # The browser only sees a generic error; the reason is kept in `blocked`.
             request_route.abort("blockedbyclient")
             return
         request_route.fulfill(response=response)
@@ -441,6 +503,7 @@ def _fetch_browser(url: str, cfg: FetchConfig) -> _Page:
                         url, wait_until="networkidle", timeout=cfg.timeout_s * 1000
                     )
                 except PlaywrightError:
+                    # Report the block, not the browser's generic navigation error.
                     if blocked:
                         raise BlockedAddress(blocked[0]) from None
                     raise
@@ -477,6 +540,11 @@ def _fetch_browser(url: str, cfg: FetchConfig) -> _Page:
 
 
 def _write_atomic(path: Path, data: bytes) -> None:
+    """Write to a temporary file next to path, then rename it into place.
+
+    os.replace is atomic on the same file system, so readers see the old or the new
+    file, never half of one.
+    """
     tmp = path.with_name(f".{path.name}.tmp")
     tmp.write_bytes(data)
     os.replace(tmp, path)

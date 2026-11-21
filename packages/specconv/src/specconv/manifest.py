@@ -13,6 +13,7 @@ MANIFEST_NAME = "manifest.json"
 
 
 def manifest_path(output_dir: Path) -> Path:
+    """Path of the manifest file in the output folder."""
     return output_dir / MANIFEST_NAME
 
 
@@ -29,6 +30,7 @@ def load_previous(output_dir: Path) -> Manifest:
 
 
 def save(manifest: Manifest, output_dir: Path) -> Path:
+    """Stamp the manifest with generator and time, write it, and return its path."""
     manifest.generator = f"specconv {__version__}"
     manifest.generated_at = dt.datetime.now(dt.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
     path = manifest_path(output_dir)

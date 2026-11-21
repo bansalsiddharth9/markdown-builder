@@ -1,4 +1,8 @@
-"""`specweb serve` (web server) and `specweb worker` (queue consumer)."""
+"""`specweb serve` (web server) and `specweb worker` (queue consumer).
+
+Both read the same specweb.yaml (deviation WB8). They run as two separate
+processes that share the data folder.
+"""
 
 from __future__ import annotations
 
@@ -17,6 +21,11 @@ ConfigOpt = Annotated[
 
 
 def _load(config: Path | None):
+    """Load the settings, or exit with code 2 and a message on a config error.
+
+    Also sets $SPECWEB_DATA and creates the data folder.
+    """
+    # Imported only when a command runs, not when the CLI module loads.
     from specweb.settings import ConfigError, load_config
 
     try:
@@ -25,6 +34,7 @@ def _load(config: Path | None):
         typer.echo(f"error: {exc}", err=True)
         raise typer.Exit(2) from exc
     # The queue module reads its location from the environment when imported.
+    # So this must run before specweb.tasks is imported (create_app imports it).
     os.environ["SPECWEB_DATA"] = str(cfg.data_dir)
     cfg.data_dir.mkdir(parents=True, exist_ok=True)
     return cfg
@@ -47,12 +57,15 @@ def serve(
     import uvicorn
 
     cfg = _load(config)
+    # Import after _load: the app imports specweb.tasks, which reads $SPECWEB_DATA.
     from specweb.app import create_app
 
     uvicorn.run(
         create_app(cfg),
         host=host,
         port=port,
+        # Take the client address from X-Forwarded-For, but only from the
+        # trusted proxies; otherwise anyone could fake it (deviation SEC6).
         proxy_headers=True,
         forwarded_allow_ips=forwarded_allow_ips,
     )
@@ -64,10 +77,14 @@ def worker(config: ConfigOpt = None) -> None:
     cfg = _load(config)
     from huey.consumer import Consumer
 
+    # Import after _load: the queue file location comes from $SPECWEB_DATA.
     from specweb.tasks import huey
 
+    # worker_concurrency jobs at once, each in its own consumer process (default 1,
+    # because conversion needs several GB of memory; design: Jobs and workers).
     Consumer(huey, workers=cfg.worker_concurrency, worker_type="process").run()
 
 
 def main() -> None:
+    """Entry point of the `specweb` command."""
     app()

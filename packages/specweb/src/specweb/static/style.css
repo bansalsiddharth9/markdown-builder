@@ -1,4 +1,5 @@
-/* Dark theme with a left sidebar. Dark only: there is no light variant. */
+/* Dark theme with a left sidebar. Dark only: there is no light variant (deviation WB16).
+   All styles live in this file: the CSP (style-src 'self') blocks inline styles. */
 :root {
   color-scheme: dark;
   --bg: #0b0b0c;          /* page */
@@ -22,7 +23,7 @@ html, body { height: 100%; }
 body {
   margin: 0; font: 14px/1.55 Inter, system-ui, -apple-system, "Segoe UI", sans-serif;
   color: var(--fg); background: var(--bg);
-  display: grid; grid-template-columns: 15rem 1fr;
+  display: grid; grid-template-columns: 15rem 1fr;  /* sidebar | page */
 }
 a { color: var(--link); text-decoration: none; }
 a:hover { text-decoration: underline; }
@@ -32,7 +33,7 @@ strong { font-weight: 600; }
 
 /* ---------------------------------------------------------------- sidebar */
 aside.sidebar {
-  position: sticky; top: 0; height: 100vh; overflow-y: auto;
+  position: sticky; top: 0; height: 100vh; overflow-y: auto;  /* stays put while the page scrolls */
   background: var(--panel); border-right: 1px solid var(--line);
   padding: 1rem .75rem; display: flex; flex-direction: column; gap: 1.25rem;
 }
@@ -53,6 +54,7 @@ aside.sidebar nav a[aria-current="page"] { background: #232327; color: var(--fg)
 aside.sidebar nav svg { width: 16px; height: 16px; flex: none; opacity: .85; }
 
 /* ------------------------------------------------------------------- page */
+/* min-width: 0 lets wide tables and code scroll inside the grid column instead of widening it */
 .page { min-width: 0; display: flex; flex-direction: column; }
 main { width: 100%; max-width: 80rem; padding: 1.75rem 2rem 3rem; flex: 1; }
 footer.note { color: var(--muted); font-size: .8rem; padding: 1rem 2rem; border-top: 1px solid var(--line); }
@@ -105,7 +107,7 @@ details.metadata summary { cursor: pointer; color: #c4c4ca; }
 table {
   border-collapse: separate; border-spacing: 0; width: 100%; margin: 1rem 0;
   background: var(--panel); border: 1px solid var(--line); border-radius: 10px; overflow: hidden;
-}
+}  /* separate borders + overflow: hidden, so the rounded corners show */
 th, td { text-align: left; padding: .65rem .9rem; border-bottom: 1px solid var(--line); vertical-align: top; }
 th { color: var(--muted); font-weight: 500; font-size: .8rem; }
 tbody tr:last-child td { border-bottom: 0; }
@@ -118,6 +120,7 @@ tbody tr:hover td { background: #17171a; }
   background: #202024; color: #c4c4ca; border: 1px solid var(--line-strong);
 }
 .pill .dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+/* One rule per status value: pill() in _macros.html adds the class s-<status> */
 .s-pass, .s-done, .s-ok { color: var(--pass); background: rgba(74, 222, 128, .08); border-color: rgba(74, 222, 128, .25); }
 .s-warn, .s-skipped_unchanged { color: var(--warn); background: rgba(242, 177, 76, .08); border-color: rgba(242, 177, 76, .25); }
 .s-fail, .s-error, .s-failed, .s-no_text_layer, .s-not_converted {
@@ -135,7 +138,7 @@ nav.tabs a:hover { background: var(--panel-2); text-decoration: none; }
 nav.tabs a.active { background: #2a2a2f; color: var(--fg); }
 .split { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; align-items: start; }
 .split .markdown { max-height: 80vh; overflow: auto; }
-iframe.source { width: 100%; height: 80vh; border: 1px solid var(--line); border-radius: 8px; background: #fff; }
+iframe.source { width: 100%; height: 80vh; border: 1px solid var(--line); border-radius: 8px; background: #fff; }  /* sources are made for white paper (WB16) */
 .source-pane .docx { max-height: 75vh; overflow: auto; }
 article.markdown {
   background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 1rem 1.5rem;
@@ -150,8 +153,9 @@ article.markdown img { max-width: 100%; background: #fff; border-radius: 4px; } 
 article.markdown blockquote { border-left: 3px solid var(--line-strong); margin-left: 0; padding-left: 1rem; color: #c4c4ca; }
 article.markdown hr { border: 0; border-top: 1px solid var(--line); }
 pre.raw .line { display: block; }
+/* :target highlights the line linked from the review queue (#L<n>) */
 pre.raw .line:target { background: rgba(242, 177, 76, .16); }
-pre.raw .ln { display: inline-block; width: 4em; color: #5f5f67; user-select: none; }
+pre.raw .ln { display: inline-block; width: 4em; color: #5f5f67; user-select: none; }  /* copying text skips line numbers */
 ol.queue { padding-left: 1.5rem; }
 ol.queue li { margin: .5rem 0; padding: .6rem .8rem; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; }
 ol.queue blockquote { margin: .35rem 0 0 1.5rem; color: var(--muted); }
@@ -184,6 +188,7 @@ dialog {
   max-width: 28rem; width: calc(100% - 2rem); padding: 1.25rem 1.5rem;
   color: var(--fg); background: var(--panel); border: 1px solid var(--line-strong); border-radius: 10px;
 }
+/* ::backdrop is the dimmed page behind the modal (showModal in dialog.js) */
 dialog::backdrop { background: rgba(0, 0, 0, .6); }
 dialog h2 { font-size: 1.1rem; margin: 0 0 .5rem; }
 dialog p { color: #c4c4ca; margin: 0 0 1.25rem; }

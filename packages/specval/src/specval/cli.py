@@ -1,7 +1,8 @@
 """Command line interface (design: CLI).
 
-Exit codes: 0 all ok; 1 at least one document failed; 2 bad configuration
-or missing system dependency.
+Exit codes: 0 all ok; 1 at least one document failed (or an approval was
+refused); 2 bad configuration, bad manifest or missing dependency.
+Warnings alone never change the exit code.
 """
 
 from __future__ import annotations
@@ -25,6 +26,7 @@ EXIT_OK = 0
 EXIT_FAILED = 1
 EXIT_CONFIG = 2
 
+# Used only when the file exists; --acceptance given explicitly must exist.
 DEFAULT_ACCEPTANCE_PATH = Path("config/acceptance.yaml")
 
 app = typer.Typer(
@@ -34,16 +36,19 @@ app = typer.Typer(
     add_completion=False,
 )
 
+# Options shared by both commands.
 OutputOpt = Annotated[Path, typer.Option("--output", help="specconv output folder.")]
 ValidationOpt = Annotated[Path, typer.Option("--validation", help="Folder for reports.")]
 
 
 def _fail_config(message: str) -> typer.Exit:
+    """Print an error and return an exit-code-2 exception for the caller to raise."""
     typer.echo(f"error: {message}", err=True)
     return typer.Exit(EXIT_CONFIG)
 
 
 def _check_dependencies() -> None:
+    """Exit with code 2, listing every problem, if a dependency is missing."""
     problems = deps.check_all()
     if problems:
         typer.echo("error: missing dependencies:", err=True)
@@ -53,6 +58,7 @@ def _check_dependencies() -> None:
 
 
 def _read_manifest(output: Path) -> Manifest:
+    """Read <output>/manifest.json; a missing or invalid manifest exits with code 2."""
     path = output / "manifest.json"
     try:
         return read_manifest(path)
@@ -86,7 +92,13 @@ def run(
         bool, typer.Option("--verbose", "-v", help="Also show debug messages.")
     ] = False,
 ) -> None:
-    """Check every converted document and write reports to the validation folder."""
+    """Check every converted document and write reports to the validation folder.
+
+    Writes <id>.json and <id>.md per document, summary.csv and a run log. With
+    --doc only that document is checked and the other summary rows are kept
+    (deviation V-r). Exits 1 if any document fails (deviation V-o).
+    """
+    # Config problems are reported before any work starts (deviation D3).
     try:
         cfg = load_config(config)
         if acceptance is None and DEFAULT_ACCEPTANCE_PATH.exists():
@@ -100,6 +112,7 @@ def run(
         raise _fail_config(f"--doc {doc!r}: not in {output / 'manifest.json'}")
 
     entries = [e for e in manifest.entries if doc is None or e.id == doc]
+    # One timestamp for the whole run, so every report of a run shows the same time.
     now = dt.datetime.now(dt.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
     reports = []
     with run_logging(validation / f"run-{run_timestamp()}.log", verbose) as log:
@@ -113,6 +126,7 @@ def run(
         log.debug("config: %s", cfg)
         log.info("tool versions: %s", deps.tool_versions())
         known = {e.id for e in manifest.entries}
+        # Only a warning, so the questions for the other documents are still checked.
         for q in questions:
             if q.doc not in known:
                 log.warning("acceptance question %r names unknown document %r", q.question, q.doc)
@@ -124,6 +138,7 @@ def run(
             statuses = " ".join(
                 f"{c.id}={c.status}" for c in report.checks if c.status != "not_run"
             )
+            # Not-converted documents have no check results; show why instead.
             level = logging.ERROR if report.is_failure else logging.INFO
             log.log(
                 level,
@@ -133,6 +148,7 @@ def run(
                 f" [{statuses}]" if statuses else "; " + "; ".join(report.notes),
                 report.duration_s,
             )
+        # keep_others: with --doc, keep the summary rows of the other documents.
         summary = write_summary(
             reports, validation, keep_others={e.id for e in manifest.entries} if doc else None
         )
@@ -162,7 +178,12 @@ def approve(
     by: Annotated[str | None, typer.Option("--by", help="Name of the person approving.")] = None,
     validation: ValidationOpt = Path("validation"),
 ) -> None:
-    """Mark a reviewed document as validated in its front matter."""
+    """Mark a reviewed document as validated in its front matter.
+
+    Refused (exit 1) when the report is missing, the Markdown changed since
+    it was validated, or the report has fail findings and no --override.
+    See specval.approve and deviation V-ab.
+    """
     if override is not None and not override.strip():
         raise _fail_config("--override needs a non-empty reason")
     manifest = _read_manifest(output)
@@ -177,4 +198,5 @@ def approve(
 
 
 def main() -> None:
+    """Entry point of the ``specval`` command."""
     app()

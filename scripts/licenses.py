@@ -3,7 +3,7 @@
     uv run python scripts/licenses.py          # rewrite LICENSES.md
     uv run python scripts/licenses.py --check  # exit 1 if stale or a license is not allowed
 
-Python packages are read from the environment's metadata. System tools and
+Python packages are read from the environment's metadata (deviation E7). System tools and
 model weights cannot be discovered that way and are listed by hand below;
 update them when a tool or model changes.
 """
@@ -16,8 +16,9 @@ import sys
 from importlib.metadata import distributions
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = Path(__file__).resolve().parent.parent  # scripts/ is one level down
 LICENSES_MD = REPO_ROOT / "LICENSES.md"
+# This project's own packages (lower-case distribution names); not listed.
 OWN_PACKAGES = {"common", "specconv", "specval", "specweb", "spec-md"}
 
 # Licenses allowed for use inside a company. Anything else fails --check
@@ -39,10 +40,12 @@ ALLOWED = {
     "MPL-2.0",
     "PSF-2.0",
     "Zlib",
+    # Not a license: pypdfium2 lists it next to its real licenses, meaning the
+    # licenses of code it bundles.
     "dependency licenses",
 }
 
-# Classifier / free-text labels -> SPDX ids
+# Classifier / free-text labels -> SPDX ids, so they can be checked against ALLOWED.
 NORMALIZE = {
     "MIT License": "MIT",
     "OSI Approved; MIT License": "MIT",
@@ -54,6 +57,7 @@ NORMALIZE = {
     "Mozilla Public License 2.0 (MPL 2.0)": "MPL-2.0",
 }
 
+# Not Python packages, so metadata cannot find them; update by hand.
 SYSTEM_TOOLS = [
     # name, version, license, how it is used
     (
@@ -100,6 +104,13 @@ MODEL_WEIGHTS = [
 
 
 def _license_of(dist) -> str:
+    """Best license label for an installed distribution.
+
+    Tries, in order: the SPDX License-Expression field, the "License ::"
+    classifiers, the free-text License field (first line, at most 60
+    characters, as some packages paste the whole license text there), and
+    finally the license file itself.
+    """
     meta = dist.metadata
     expr = meta.get("License-Expression")
     if expr:
@@ -130,10 +141,15 @@ LICENSE_TEXTS = {
 
 
 def _license_from_file(dist) -> str:
+    """Guess the license from a LICENSE/COPYING file's opening words, or "UNKNOWN".
+
+    "UNKNOWN" is not in ALLOWED, so --check fails until a person looks.
+    """
     for file in dist.files or []:
         if "LICEN" not in file.name.upper() and "COPYING" not in file.name.upper():
             continue
         try:
+            # Whitespace collapsed, so the phrases match across line breaks.
             text = " ".join(Path(dist.locate_file(file)).read_text(errors="replace").split())
         except OSError:
             continue
@@ -145,12 +161,18 @@ def _license_from_file(dist) -> str:
 
 def _license_ids(expression: str) -> set[str]:
     """Split an SPDX-like expression into license ids (ignoring AND/OR/WITH)."""
+    # Drop the "(from LICENSE.txt)" note added by _license_from_file.
     expression = re.sub(r"\s*\(from [^)]*\)", "", expression)
+    # Split on the operators and on brackets, commas and semicolons.
     parts = re.split(r"\s+(?:AND|OR|WITH)\s+|[(),;]", expression)
     return {NORMALIZE.get(p.strip(), p.strip()) for p in parts if p.strip()}
 
 
 def collect() -> list[tuple[str, str, str]]:
+    """(name, version, license) of every installed package, sorted by name.
+
+    Keyed by lower-case name, so a package seen twice is listed once.
+    """
     rows = {}
     for dist in distributions():
         name = dist.metadata["Name"]
@@ -162,10 +184,15 @@ def collect() -> list[tuple[str, str, str]]:
 
 
 def disallowed(packages: list[tuple[str, str, str]]) -> list[str]:
+    """Packages with any license id not in ALLOWED, as "name version: license".
+
+    Strict on purpose: for "A OR B" both must be allowed.
+    """
     return [f"{n} {v}: {lic}" for n, v, lic in packages if not _license_ids(lic) <= ALLOWED]
 
 
 def render(packages: list[tuple[str, str, str]]) -> str:
+    """The full text of LICENSES.md. Deterministic, so --check can compare it."""
     out = [
         "# Licenses",
         "",
@@ -216,6 +243,12 @@ def render(packages: list[tuple[str, str, str]]) -> str:
 
 
 def main() -> int:
+    """Write LICENSES.md, or with --check only compare it.
+
+    Exit 1 if a license is not allowed (in both modes) or, with --check, if
+    the file is out of date; otherwise 0.
+    """
+    # The first line of the module docstring is the --help description.
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument(
         "--check",

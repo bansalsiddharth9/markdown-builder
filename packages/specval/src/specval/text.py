@@ -4,9 +4,9 @@ A Segment is the text of one block (paragraph, heading, table cell, code
 block, list item …) with its context, so a value split by inline markup
 (``<b>shall</b> not``) is still found as one token, and with its location.
 
-The HTML walker is used for source HTML (parsed with lxml) and for raw HTML
-inside the Markdown (parsed with html.parser), so both sides are cut into
-segments the same way.
+The HTML walker is used for source HTML (parsed with html5lib, deviations
+HP1) and for raw HTML inside the Markdown (parsed with html.parser), so both
+sides are cut into segments the same way.
 """
 
 from __future__ import annotations
@@ -18,20 +18,27 @@ from dataclasses import dataclass
 from bs4 import BeautifulSoup, Comment, Declaration, Doctype, NavigableString, Tag
 from bs4.element import CData, ProcessingInstruction
 
+# Segment contexts. V4's table-only family and V8's fail/warn split use them.
 TEXT, TABLE, CODE = "text", "table", "code"
 
+# Elements that start a new segment; any other tag is inline and its text
+# joins the current segment.
 BLOCK_TAGS = frozenset(
     """address article aside blockquote body caption center dd details dialog dir div dl dt
     fieldset figcaption figure footer form h1 h2 h3 h4 h5 h6 header hgroup hr li main menu nav
     ol p pre section summary table tbody td tfoot th thead tr ul""".split()
 )
 HEADING_TAGS = ("h1", "h2", "h3", "h4", "h5", "h6")
+# BeautifulSoup string types that are not visible text.
 _SKIP_STRINGS = (Comment, Declaration, Doctype, CData, ProcessingInstruction)
 _SKIP_TAGS = frozenset({"script", "style", "noscript", "template", "head"})
 
 
 @dataclass(frozen=True)
 class Segment:
+    """The text of one block, its context, and where it is: md_line on the
+    Markdown side, source_loc on the source side."""
+
     text: str
     ctx: str  # text | table | code
     md_line: int | None = None
@@ -55,12 +62,17 @@ def is_layout_box(table: Tag) -> bool:
 
 
 def element_ctx(element: Tag) -> str:
-    """code inside <pre>; table inside a real table's cells; else text. A table
-    caption counts as text: Pandoc writes a pipe table's caption as a paragraph."""
+    """code inside <pre>; table inside a real table's cells; else text.
+
+    A table caption counts as text: Pandoc writes a pipe table's caption as a
+    paragraph. Text inside a one-cell layout box is text, since the converter
+    unwraps such boxes.
+    """
     if element.name == "pre" or element.find_parent("pre") is not None:
         return CODE
     if element.name == "caption" or element.find_parent("caption") is not None:
         return TEXT
+    # Any real (not one-cell) table around the element makes it table text.
     tables = ([element] if element.name == "table" else []) + element.find_parents("table")
     if any(not is_layout_box(t) for t in tables):
         return TABLE
@@ -71,12 +83,18 @@ def html_segments(
     root: Tag | BeautifulSoup, locate: Callable[[Tag], tuple[int | None, str | None]]
 ) -> list[Segment]:
     """Cut the visible text under root into block segments, in document order.
-    locate(block element) gives (md_line, source_loc) for a segment."""
+
+    locate(block element) gives (md_line, source_loc) for a segment. Text is
+    buffered until the next block starts or ends, so inline markup inside a
+    block (<b>shall</b> not) stays in one segment. <br> becomes a newline.
+    Whitespace-only segments are dropped.
+    """
     segments: list[Segment] = []
     buffer: list[str] = []
     owner: list[Tag] = [root]  # the block element the buffered text belongs to
 
     def flush() -> None:
+        """Turn the buffered text into a segment of the innermost open block."""
         text = "".join(buffer)
         buffer.clear()
         if text.strip():
@@ -85,6 +103,7 @@ def html_segments(
             segments.append(Segment(text, element_ctx(block), line, loc))
 
     def walk(node: Tag) -> None:
+        """Collect node's text; a block child is flushed on its own."""
         for child in node.children:
             if isinstance(child, NavigableString):
                 if not isinstance(child, _SKIP_STRINGS):

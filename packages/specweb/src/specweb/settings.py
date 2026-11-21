@@ -21,6 +21,11 @@ class ConfigError(ValueError):
 
 @dataclass(frozen=True)
 class WebConfig:
+    """All specweb settings, with their defaults. Frozen: never changed at run time.
+
+    Every field is a key allowed in specweb.yaml.
+    """
+
     data_dir: Path = Path("data")
     # passed to the CLIs as --config; None: their own defaults
     specconv_config: Path | None = None
@@ -28,19 +33,26 @@ class WebConfig:
     acceptance: Path | None = None
     step_timeout_s: float = 900.0  # per document and step (design: 15 minutes)
     worker_concurrency: int = 1
-    max_file_mb: float = 100.0
-    max_files: int = 20
-    max_jobs_per_ip: int = 5
-    max_queue: int = 50
-    retention_days: int = 30
-    min_free_disk_mb: float = 1024.0
+    max_file_mb: float = 100.0  # per uploaded file
+    max_files: int = 20  # per job
+    max_jobs_per_ip: int = 5  # queued or running jobs per client address
+    max_queue: int = 50  # queued or running jobs in total
+    retention_days: int = 30  # jobs older than this are deleted daily
+    min_free_disk_mb: float = 1024.0  # new jobs are refused below this
     fetch_allowlist: tuple[str, ...] = field(default_factory=tuple)  # internal hosts allowed
 
     def to_dict(self) -> dict[str, Any]:
+        """Plain values (paths as strings), so the config can go through the
+        queue to the worker; from_dict reads it back."""
         return {k: (str(v) if isinstance(v, Path) else v) for k, v in asdict(self).items()}
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> WebConfig:
+        """Build a config from a mapping, strictly: unknown keys, wrong types
+        and negative numbers raise ConfigError.
+
+        Only max_jobs_per_ip and min_free_disk_mb may be 0.
+        """
         known = {f.name: f for f in fields(cls)}
         unknown = set(data) - set(known)
         if unknown:
@@ -61,7 +73,7 @@ class WebConfig:
             elif value < 0 or (value == 0 and name not in ("max_jobs_per_ip", "min_free_disk_mb")):
                 raise ConfigError(f"{name}: must be positive, got {value!r}")
             else:
-                values[name] = type(default)(value)
+                values[name] = type(default)(value)  # e.g. 100 -> 100.0 for a float field
         return cls(**values)
 
 
@@ -81,6 +93,7 @@ def load_config(path: Path | None = None) -> WebConfig:
             raise ConfigError(f"{path}: invalid YAML: {exc}") from exc
         if not isinstance(data, dict):
             raise ConfigError(f"{path}: expected a mapping")
+        # So the file works the same from any working directory.
         for key in ("data_dir", "specconv_config", "specval_config", "acceptance"):
             if data.get(key) is not None:
                 data[key] = str((path.parent / data[key]).resolve())

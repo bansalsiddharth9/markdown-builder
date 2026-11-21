@@ -60,6 +60,11 @@ AllowHostOpt = Annotated[
 
 
 def _with_guard(cfg: SpecconvConfig, block: bool, allow: list[str] | None) -> SpecconvConfig:
+    """Add the command-line address-blocking options to the config (deviation F17).
+
+    --block-private-addresses can only turn blocking on, never off; --allow-host
+    adds hosts to the allow list from the config file.
+    """
     if not block and not allow:
         return cfg
     fetch_cfg = dataclasses.replace(
@@ -71,11 +76,13 @@ def _with_guard(cfg: SpecconvConfig, block: bool, allow: list[str] | None) -> Sp
 
 
 def _fail_config(message: str) -> typer.Exit:
+    """Print the error and return an exit-2 exception for the caller to raise."""
     typer.echo(f"error: {message}", err=True)
     return typer.Exit(EXIT_CONFIG)
 
 
 def _load(config: Path | None, sources: Path | None) -> tuple[SpecconvConfig, list[Source]]:
+    """Load specconv.yaml and (if given) sources.yaml; a config error exits with 2."""
     try:
         cfg = load_config(config)
         srcs = load_sources(sources) if sources is not None else []
@@ -92,6 +99,7 @@ def _check_dependencies(
     need_models: bool = False,
 ) -> None:
     """Report every missing dependency, then exit 2 if there was any."""
+    # Before the Chromium check, so it looks in the configured folder (deviation E3).
     deps.configure_browsers_path(cfg.fetch.browsers_path)
     problems = deps.check_python()
     if need_pandoc:
@@ -110,6 +118,7 @@ def _check_dependencies(
 
 
 def _only_known(only: str | None, srcs: list[Source], sources_path: Path | None) -> None:
+    """Exit 2 when --only names an id that is not in sources.yaml."""
     if only is not None and sources_path is not None and only not in {s.id for s in srcs}:
         raise _fail_config(f"--only {only!r}: no source with that id in {sources_path}")
 
@@ -136,6 +145,7 @@ def fetch(
         cfg,
         need_pandoc=False,
         need_docling=False,
+        # Chromium only for browser sources that will really be downloaded (F12).
         need_chromium=any(
             s.render == "browser" and (refetch or fetching.load_cached(work, s) is None)
             for s in selected
@@ -150,6 +160,7 @@ def fetch(
                 outcome = fetching.fetch_source(source, cfg.fetch, work, refetch=refetch)
             except fetching.FetchError as exc:
                 failed.append(source.id)
+                # A failed fetch never touches the cache, so say if an older copy is there (F4).
                 kept = fetching.load_cached(work, source)
                 log.error(
                     "%s: fetch failed: %s%s",
@@ -208,7 +219,11 @@ def convert(
     block_private_addresses: BlockOpt = False,
     allow_host: AllowHostOpt = None,
 ) -> None:
-    """Convert an input folder and/or the web pages in sources.yaml to Markdown."""
+    """Convert an input folder and/or the web pages in sources.yaml to Markdown.
+
+    Unchanged documents are skipped unless --force. With --only, other documents'
+    manifest entries are kept; without it the manifest lists exactly this run's inputs.
+    """
     if input is None and sources is None:
         raise _fail_config("give --input, --sources or both")
     if input is not None and not input.is_dir():
@@ -219,6 +234,8 @@ def convert(
         previous = manifest_io.load_previous(output)
     except ManifestError as exc:
         raise _fail_config(f"{manifest_io.manifest_path(output)}: {exc}") from exc
+    # Existing output folders are reserved, so a new file never gets the id (and folder)
+    # of an old document that is no longer in the manifest (deviation P6).
     existing_folders = (
         {p.name for p in output.iterdir() if p.is_dir() and not p.name.startswith(".")}
         if output.is_dir()
@@ -227,6 +244,7 @@ def convert(
     scan = routing.scan(
         input,
         srcs,
+        # For local files the manifest's "source" is the path relative to the input folder.
         previous_ids={e.source: e.id for e in previous.entries if e.source_type != "web"},
         reserved=existing_folders,
     )
@@ -319,4 +337,5 @@ def download_models(
 
 
 def main() -> None:
+    """Run the Typer app (console script and ``python -m specconv``)."""
     app()

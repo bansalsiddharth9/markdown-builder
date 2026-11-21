@@ -42,6 +42,8 @@ from specval.text import (
 
 @dataclass(frozen=True)
 class RefHeading:
+    """A source heading; loc is a human-readable location for reports."""
+
     level: int
     text: str
     loc: str
@@ -49,6 +51,8 @@ class RefHeading:
 
 @dataclass(frozen=True)
 class RefTable:
+    """A source table. page is set for PDF tables (pdfplumber)."""
+
     loc: str
     rows: tuple[tuple[str, ...], ...]  # distinct cells per row (V1 keys)
     page: int | None = None
@@ -57,12 +61,21 @@ class RefTable:
 
 @dataclass(frozen=True)
 class RefCode:
+    """A source code block (<pre>, or DOCX code paragraphs)."""
+
     loc: str
     text: str
 
 
 @dataclass
 class Reference:
+    """What the checks compare the Markdown against, from one source file.
+
+    A field that is None was not extracted for this kind of source (PDF has
+    no headings, code blocks or image count); checks treat that as "not
+    available", not as zero.
+    """
+
     kind: str  # html | docx | pdf
     headings: list[RefHeading] | None = None  # None: not available (PDF)
     tables: list[RefTable] = field(default_factory=list)
@@ -76,13 +89,19 @@ class Reference:
 
 # ------------------------------------------------------------------- HTML
 
+# Page parts removed by clean: main-content, the same as the converter does.
 PAGE_CHROME_ALWAYS = ("nav", "aside")
 PAGE_CHROME_OUTSIDE_CONTENT = ("header", "footer")
 CONTENT_TAGS = ["main", "article", "section"]
 
 
 def _main_content(soup: BeautifulSoup, drop_selectors: Iterable[str]) -> None:
-    """clean: main-content as recorded in deviations F7."""
+    """clean: main-content as recorded in deviations F7, applied in place.
+
+    Keep only <main>, or else the outermost <article>s; if neither exists the
+    whole body stays. Then drop nav and aside everywhere, header and footer
+    outside main/article/section, and anything matching drop_selectors.
+    """
     body = soup.body or soup
     main = soup.find("main")
     keep = (
@@ -98,6 +117,7 @@ def _main_content(soup: BeautifulSoup, drop_selectors: Iterable[str]) -> None:
             body.append(element)
     for tag in PAGE_CHROME_ALWAYS:
         for element in soup.find_all(tag):
+            # An element inside one already removed is decomposed with it.
             if not element.decomposed:
                 element.decompose()
     for tag in PAGE_CHROME_OUTSIDE_CONTENT:
@@ -110,6 +130,7 @@ def _main_content(soup: BeautifulSoup, drop_selectors: Iterable[str]) -> None:
                 element.decompose()
 
 
+# A <meta charset=...> or <meta http-equiv=... content="...; charset=...">.
 _DECLARED_CHARSET = re.compile(rb"<meta[^>]+charset", re.I)
 
 
@@ -120,6 +141,8 @@ def _decode_html(data: bytes, encoding: str | None) -> bytes | str:
     encoding (windows-1252); browsers first check whether the bytes are valid
     UTF-8, and so does this. A given or declared encoding is left to html5lib.
     """
+    # Look only near the top: a charset meta must be in the first 1024 bytes
+    # by the HTML standard; 4096 leaves room for pages that put it later.
     if encoding is not None or _DECLARED_CHARSET.search(data[:4096]):
         return data
     try:
@@ -136,6 +159,14 @@ def from_html(
     drop_selectors: Iterable[str] = (),
     encoding: str | None = None,
 ) -> Reference:
+    """Reference data from a saved HTML page (deviations HP1).
+
+    strip_tags, clean and drop_selectors are the cleanup options the
+    converter recorded in the manifest; encoding is the one it recorded, if
+    any. Tables with one cell are layout boxes and not counted (deviations
+    V-g); every <pre> is a code block; <img> and outermost <svg> are images
+    (deviations V-j).
+    """
     soup = BeautifulSoup(_decode_html(data, encoding), "html5lib", from_encoding=encoding)
     for tag in strip_tags:
         for element in soup.find_all(tag):
@@ -153,6 +184,7 @@ def from_html(
         section[id(element)] = current
 
     def loc(element: Tag) -> str:
+        """'<tag> in section ...', for findings."""
         return f"<{element.name}> in section '{section.get(id(element), 'start of document')}'"
 
     ref = Reference(kind="html", headings=[], code_blocks=[], images=[])
@@ -161,6 +193,7 @@ def from_html(
         if name in HEADING_TAGS:
             ref.headings.append(RefHeading(int(name[1]), visible_text(element), loc(element)))
         elif name == "table" and not is_layout_box(element):
+            # Rows of this table only; cells of nested tables are not its cells.
             rows = tuple(
                 tuple(visible_text(c) for c in tr.find_all(["td", "th"]))
                 for tr in element.find_all("tr")
@@ -179,8 +212,11 @@ def from_html(
 
 # ------------------------------------------------------------------- DOCX
 
+# WordprocessingML namespace, in lxml's {uri}tag form.
 W = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
+# Word's built-in heading styles: "Heading 1" ... "Heading 9" (any case).
 HEADING_STYLE = re.compile(r"^heading\s*([1-9])$", re.I)
+# A style name that suggests code (deviations V-f): "Source Code", "Code Block" ...
 CODE_STYLE = re.compile(r"code|source", re.I)
 MONOSPACE_FONTS = ("courier", "consolas", "menlo", "monaco", "source code", "lucida console")
 
@@ -204,6 +240,8 @@ def _w_text(element) -> str:
 
 
 def _style_name(paragraph) -> str:
+    """The paragraph's style name, or "" when it has none. python-docx raises
+    KeyError or ValueError for a style id that the styles part lacks."""
     try:
         return paragraph.style.name if paragraph.style is not None else ""
     except (KeyError, ValueError):
@@ -211,6 +249,11 @@ def _style_name(paragraph) -> str:
 
 
 def _is_monospace(paragraph) -> bool:
+    """True when every run with text is in a monospace font (deviations V-f).
+
+    A run without its own font uses the paragraph style's font. Fonts set
+    only through a base style, the theme or document defaults are not seen.
+    """
     runs = [r for r in paragraph.runs if r.text.strip()]
     if not runs:
         return False
@@ -222,6 +265,13 @@ def _is_monospace(paragraph) -> bool:
 
 
 def from_docx(path: Path) -> Reference:
+    """Reference data from a DOCX file, walking body content in document order.
+
+    Consecutive code paragraphs form one code block. Paragraphs inside table
+    cells are table text and never headings or code. Footnotes and endnotes
+    are added as text at the end, because Pandoc writes them into the
+    Markdown.
+    """
     import docx
     from docx.table import Table
     from docx.text.paragraph import Paragraph
@@ -233,6 +283,7 @@ def from_docx(path: Path) -> Reference:
     code_loc: list[str] = []
 
     def end_code() -> None:
+        """Close the open run of code paragraphs as one code block."""
         if code_lines:
             text = "\n".join(code_lines)
             ref.code_blocks.append(RefCode(code_loc[0], text))
@@ -244,6 +295,7 @@ def from_docx(path: Path) -> Reference:
         return f"paragraph {state['paragraph']} in section '{state['section']}'"
 
     def visit_paragraph(paragraph: Paragraph, in_table: bool) -> None:
+        """Add one paragraph as a heading, code line or text segment."""
         state["paragraph"] += 1
         style = _style_name(paragraph)
         text = _w_text(paragraph._p)
@@ -270,6 +322,8 @@ def from_docx(path: Path) -> Reference:
         return normalize(" ".join(_w_text(p) for p in tc.iter(f"{W}p")))
 
     def visit_table(table: Table) -> None:
+        """Add one table (V1 rows and V5 grid) and visit the paragraphs and
+        nested tables in its cells."""
         end_code()
         state["table"] += 1
         loc = f"table {state['table']} in section '{state['section']}'"
@@ -282,6 +336,7 @@ def from_docx(path: Path) -> Reference:
             seen = set()
             # row.cells repeats a merged cell in every grid column it covers
             grid.append(tuple(cell_text(cell._tc) for cell in row.cells))
+            # The V1 key and the cell contents take each merged cell only once.
             for cell in row.cells:
                 if id(cell._tc) in seen:
                     continue
@@ -302,6 +357,7 @@ def from_docx(path: Path) -> Reference:
             visit_paragraph(block, in_table=False)
     end_code()
 
+    # Pictures: DrawingML <a:blip> (modern) and VML <v:imagedata> (legacy).
     body = document.element.body
     blips = body.findall(".//{http://schemas.openxmlformats.org/drawingml/2006/main}blip")
     imagedata = body.findall(".//{urn:schemas-microsoft-com:vml}imagedata")
@@ -314,11 +370,13 @@ def from_docx(path: Path) -> Reference:
 
             root = etree.fromstring(rel.target_part.blob)
             for note in root:
+                # Word's built-in separator lines between body text and notes.
                 if note.get(f"{W}type") in ("separator", "continuationSeparator"):
                     continue
                 for p in note.iter(f"{W}p"):
                     text = _w_text(p)
                     if text.strip():
+                        # location "footnote" or "endnote" (relationship type, minus the "s")
                         ref.segments.append(
                             Segment(text, TEXT, None, f"{rel.reltype.rsplit('/', 1)[-1][:-1]}")
                         )
@@ -335,6 +393,8 @@ def furniture_lines(pages: list[list[str]]) -> set[tuple[int, int]]:
     (deviations V-d): lines that appear unchanged on more than half the pages,
     and lines with one number that follows the page number ("Page 12", "- 12 -",
     "CEA-608-E 12") on more than half the pages."""
+    # Too few pages to tell furniture from text (on one page, every line
+    # would be "on more than half the pages").
     if len(pages) < 3:
         return set()
     half = len(pages) / 2
@@ -348,7 +408,9 @@ def furniture_lines(pages: list[list[str]]) -> set[tuple[int, int]]:
             exact.setdefault(key, set()).add(p)
             numbers = _DIGITS.findall(key)
             if numbers:
-                # the last number, relative to the page index, stays the same for page numbers
+                # The line with its last number replaced by "#". A page number
+                # minus the page index stays the same on every page, so lines
+                # with the same pattern and offset are a page-number line.
                 pattern = (
                     key[: key.rfind(numbers[-1])]
                     + "#"
@@ -379,11 +441,15 @@ def furniture_lines(pages: list[list[str]]) -> set[tuple[int, int]]:
 
 
 def from_pdf(path: Path) -> Reference:
+    """Reference data from a PDF: pypdf text per page (furniture lines left
+    out) and pdfplumber's tables (approximate). No headings, code blocks or
+    image count: the PDF has no reliable structure for them."""
     import logging
 
     import pdfplumber
     from pypdf import PdfReader
 
+    # Both libraries log warnings about odd objects in real-world PDFs; noise here.
     logging.getLogger("pypdf").setLevel(logging.ERROR)
     logging.getLogger("pdfminer").setLevel(logging.ERROR)
     reader = PdfReader(path)
@@ -402,7 +468,10 @@ def from_pdf(path: Path) -> Reference:
         )
     with pdfplumber.open(path) as pdf:
         for number, page in enumerate(pdf.pages, start=1):
+            # pdfplumber finds tables by their ruled lines (deviations FS-1):
+            # boxes in diagrams count, tables without lines are missed.
             for i, table in enumerate(page.find_tables(), start=1):
+                # extract() gives None for positions a merged cell covers.
                 rows = tuple(
                     tuple(normalize(cell or "") for cell in row) for row in table.extract()
                 )
@@ -413,4 +482,5 @@ def from_pdf(path: Path) -> Reference:
 
 
 def own_cell_count(table: Tag) -> int:
+    """Number of cells that belong to this table, not to nested tables."""
     return len(own_cells(table))

@@ -18,6 +18,8 @@ class ConversionError(RuntimeError):
 
 @dataclass
 class ConversionResult:
+    """What a converter returns: the raw Markdown plus facts for the manifest."""
+
     markdown: str
     tool: str  # e.g. "docling"
     tool_version: str  # e.g. "2.151.0"
@@ -29,8 +31,14 @@ class ConversionResult:
 
 
 class Converter(Protocol):
+    """A tool that turns one source file into Markdown."""
+
     name: str
 
-    def version(self) -> str: ...
+    def version(self) -> str:
+        """The tool's version string, recorded in the manifest."""
+        ...
 
-    def convert(self, src: Path, out_dir: Path) -> ConversionResult: ...
+    def convert(self, src: Path, out_dir: Path) -> ConversionResult:
+        """Convert src; images go into out_dir/media. Raises ConversionError on failure."""
+        ...

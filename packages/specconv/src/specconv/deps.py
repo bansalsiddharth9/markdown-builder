@@ -22,6 +22,8 @@ MIN_PANDOC_MAJOR = 3
 
 @dataclass(frozen=True)
 class DependencyProblem:
+    """One missing or unusable dependency, with a hint on how to fix it."""
+
     name: str
     message: str
     hint: str
@@ -38,6 +40,7 @@ def _search_path() -> str:
 
 
 def find_pandoc() -> Path | None:
+    """Path of the pandoc binary on PATH or in the venv's bin folder (deviation E2)."""
     found = shutil.which("pandoc", path=_search_path())
     return Path(found) if found else None
 
@@ -47,6 +50,7 @@ def pandoc_version(pandoc: Path) -> str:
     out = subprocess.run(
         [str(pandoc), "--version"], capture_output=True, text=True, timeout=30, check=True
     ).stdout
+    # First line looks like "pandoc 3.14" (or "pandoc.exe 3.14" on Windows).
     match = re.match(r"pandoc(?:\.exe)?\s+(\d+(?:\.\d+)*)", out)
     if not match:
         raise RuntimeError(f"unrecognised 'pandoc --version' output: {out[:80]!r}")
@@ -54,6 +58,7 @@ def pandoc_version(pandoc: Path) -> str:
 
 
 def check_python() -> list[DependencyProblem]:
+    """Check the running Python version against MIN_PYTHON."""
     if sys.version_info < MIN_PYTHON:
         need = ".".join(map(str, MIN_PYTHON))
         return [
@@ -68,6 +73,7 @@ def check_python() -> list[DependencyProblem]:
 
 
 def check_pandoc() -> list[DependencyProblem]:
+    """Check that Pandoc is found, runs, and is version 3 or newer."""
     hint = (
         "download Pandoc 3.x from https://github.com/jgm/pandoc/releases and put the "
         "'pandoc' binary on PATH or in .venv/bin"
@@ -85,6 +91,7 @@ def check_pandoc() -> list[DependencyProblem]:
 
 
 def check_python_package(dist: str, hint: str | None = None) -> list[DependencyProblem]:
+    """Check that a Python distribution is installed (without importing it)."""
     try:
         version(dist)
     except PackageNotFoundError:
@@ -112,6 +119,7 @@ def check_chromium() -> list[DependencyProblem]:
     from playwright.sync_api import Error as PlaywrightError
     from playwright.sync_api import sync_playwright
 
+    # Only asks Playwright where Chromium should be; starting it would be slow.
     try:
         with sync_playwright() as p:
             exe = Path(p.chromium.executable_path)

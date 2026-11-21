@@ -33,12 +33,20 @@ from specval.tablecheck import compare_grids, describe
 from specval.text import CODE, TABLE, Segment, normalize
 from specval.textcheck import coverage, join_pdf_hyphenation, normalize_for_v3
 
-MAX_MISSING_LISTED = 50
+MAX_MISSING_LISTED = 50  # V3 missing sentences and V8 hits listed (deviations V-u)
 
 # --------------------------------------------------------------------- V3
 
 
 def check_v3(doc: Document, cfg: SpecvalConfig) -> CheckResult:
+    """V3 text completeness: share of source sentences found in the Markdown.
+
+    Fail when coverage is below text_coverage.fail_below (default 98%), warn
+    below warn_below (default 99.5%), else pass. Missing sentences (up to 50)
+    are listed with that severity, or as info when the check passes
+    (deviations V-u). Code is left out (V6 compares it). Not applicable
+    without a source reference or readable Markdown.
+    """
     ref, md = doc.reference, doc.md
     result = CheckResult("V3", "Text completeness", PASS, "")
     if ref is None or md is None:
@@ -50,11 +58,13 @@ def check_v3(doc: Document, cfg: SpecvalConfig) -> CheckResult:
         for s in ref.segments
         if s.ctx != CODE  # code blocks are compared by V6
     ]
+    # All Markdown text, code included: a source sentence may sit in a code
+    # block in the Markdown (presence, not position, is checked).
     markdown = " ".join(
         html.unescape(s.text) if doc.from_docling and s.ctx == CODE else s.text for s in md.segments
     )
     tc = cfg.text_coverage
-    cov = coverage(source, markdown, tc, by_line=pdf)
+    cov = coverage(source, markdown, tc, by_line=pdf)  # by_line: deviations V-t
     if cov.ratio < tc.fail_below:
         result.status = FAIL
     elif cov.ratio < tc.warn_below:
@@ -88,12 +98,17 @@ def check_v3(doc: Document, cfg: SpecvalConfig) -> CheckResult:
 
 # --------------------------------------------------------------------- V5
 
-MAX_TABLE_FINDINGS = 10  # per table
+MAX_TABLE_FINDINGS = 10  # per table (PDF: 3x this for cells not in the text)
 
 
 def _pair_by_header(src_keys: list[str], md_keys: list[str]) -> list[tuple[int, int]]:
     """Pairs (source index, Markdown index): by order when the counts match,
-    otherwise by aligning header rows."""
+    otherwise by aligning header rows.
+
+    Keys must match exactly to align, but a "replace" run is paired item by
+    item too, so a table with a changed header row is still compared. Also
+    used by V6 with code block keys.
+    """
     if len(src_keys) == len(md_keys):
         return list(zip(range(len(src_keys)), range(len(md_keys)), strict=True))
     matcher = difflib.SequenceMatcher(a=src_keys, b=md_keys, autojunk=False)
@@ -105,6 +120,7 @@ def _pair_by_header(src_keys: list[str], md_keys: list[str]) -> list[tuple[int, 
 
 
 def _first_row(grid) -> str:
+    """The first row with any text, as a key for pairing tables."""
     for row in grid:
         if any(row):
             return " | ".join(row)
@@ -112,6 +128,15 @@ def _first_row(grid) -> str:
 
 
 def check_v5(doc: Document, cfg: SpecvalConfig) -> CheckResult:
+    """V5 table content: tables compared cell by cell.
+
+    HTML and DOCX: tables paired by order (or by header row when the counts
+    differ) and compared as grids (tablecheck.compare_grids; deviations V-v,
+    HP2). Any difference fails; there is no warn. Source tables left
+    unpaired are only counted here, since V1 reports them. PDF: see
+    _check_v5_pdf. Not applicable without a source reference, readable
+    Markdown, or any table.
+    """
     ref, md = doc.reference, doc.md
     result = CheckResult("V5", "Table content", PASS, "")
     if ref is None or md is None:
@@ -133,6 +158,7 @@ def check_v5(doc: Document, cfg: SpecvalConfig) -> CheckResult:
         if problems:
             differing += 1
         for p in problems[:MAX_TABLE_FINDINGS]:
+            # p.col is 1-based; line_of wants a 0-based column.
             col = p.col - 1 if p.col is not None else None
             line = out.line_of(p.md_row, col)
             findings.append(
@@ -171,10 +197,12 @@ def check_v5(doc: Document, cfg: SpecvalConfig) -> CheckResult:
 
 
 def _squash(text: str) -> str:
+    """V3's normalization with all whitespace removed."""
     return "".join(normalize_for_v3(text).split())
 
 
 def _shape(grid) -> str:
+    """'R rows x C columns' (C: the longest row), for a finding."""
     cols = max((len(r) for r in grid), default=0)
     return f"{len(grid)} rows x {cols} columns"
 
@@ -186,10 +214,11 @@ def pdf_cells_agree(plumber: str, markdown: str) -> bool:
 
 
 def _check_v5_pdf(doc: Document, cfg: SpecvalConfig, result: CheckResult) -> CheckResult:
-    """PDF (design): pair each Docling table with pdfplumber's by header
-    similarity and report cells where they disagree (warn: two extractors, the
-    second also approximate). Docling tables pdfplumber did not find: every
-    cell value must appear in the PDF text, otherwise fail."""
+    """V5 for PDFs (design; deviations V-w): pair each Docling table with
+    pdfplumber's by header similarity and report cells where they disagree
+    (warn: two extractors, the second also approximate). A different table
+    shape also warns. Docling tables pdfplumber did not find: every cell
+    value must appear in the PDF text, otherwise fail."""
     ref, md = doc.reference, doc.md
     assert ref is not None and md is not None
     # Deviations FS-1: pdfplumber reads boxes in diagrams as tables with only empty cells.
@@ -197,6 +226,9 @@ def _check_v5_pdf(doc: Document, cfg: SpecvalConfig, result: CheckResult) -> Che
     ignored = len(ref.tables) - len(plumber)
     findings: list[Finding] = []
     paired_md: set[int] = set()
+    # Tables are in page order on both sides, so each pdfplumber table looks
+    # only at the next 8 unpaired Markdown tables after the last pair, and
+    # needs a header similarity of at least 80 (rapidfuzz ratio, 0-100).
     start = 0
     for t in plumber:
         key = _first_row(t.grid)
@@ -244,6 +276,7 @@ def _check_v5_pdf(doc: Document, cfg: SpecvalConfig, result: CheckResult) -> Che
                     source_loc=t.loc,
                 )
             )
+    # The whole PDF text without spaces: pypdf and Docling space words differently.
     text = "".join(_squash(s.text) for s in ref.segments)
     not_found = 0
     for mi, out in enumerate(md.tables):
@@ -253,6 +286,7 @@ def _check_v5_pdf(doc: Document, cfg: SpecvalConfig, result: CheckResult) -> Che
             for cell in row:
                 if cell and _squash(cell) not in text:
                     not_found += 1
+                    # All are counted; only the first 30 are listed.
                     if not_found <= MAX_TABLE_FINDINGS * 3:
                         line = out.row_lines[r] if r < len(out.row_lines) else out.line
                         findings.append(
@@ -283,6 +317,17 @@ def _check_v5_pdf(doc: Document, cfg: SpecvalConfig, result: CheckResult) -> Che
 
 
 def check_v6(doc: Document, cfg: SpecvalConfig) -> CheckResult:
+    """V6 code blocks: text against the source, XML and WebVTT syntax.
+
+    HTML and DOCX: code blocks are paired with the source's (by order, or by
+    their first 80 characters when the counts differ) and any line that
+    differs after normalizing line endings and trailing spaces fails. Every
+    Markdown block that looks like XML must be well-formed, and every WebVTT
+    block must have valid timing lines; such an error fails, but is info when
+    the paired source block has the same error (deviations V-x). PDF has no
+    source code blocks, so only the syntax is checked. Not applicable when
+    there are no code blocks.
+    """
     ref, md = doc.reference, doc.md
     result = CheckResult("V6", "Code blocks", PASS, "")
     if md is None:
@@ -300,14 +345,14 @@ def check_v6(doc: Document, cfg: SpecvalConfig) -> CheckResult:
         if source_blocks
         else []
     )
-    source_of = {mi: si for si, mi in pairs}
+    source_of = {mi: si for si, mi in pairs}  # Markdown block -> its source block
     findings: list[Finding] = []
     for si, mi in pairs:
         src, out = source_blocks[si], md.code_blocks[mi]
         diff = code_differs(src.text, out.text)
         if diff is not None:
             k, a, b = diff
-            line = out.first_line + k - 1
+            line = out.first_line + k - 1  # k is the 1-based line in the block
             findings.append(
                 Finding(
                     FAIL,
@@ -370,6 +415,14 @@ def check_v6(doc: Document, cfg: SpecvalConfig) -> CheckResult:
 
 
 def check_v8(doc: Document, cfg: SpecvalConfig) -> CheckResult:
+    """V8 character confusion: tokens like "1O" or "0x2l" with a letter that
+    looks like a digit (confusion.confusable_tokens; deviations V-z).
+
+    A hit fails in a table or code block and warns elsewhere. A token the
+    source has at least as often as the Markdown is a faithful copy and is
+    not reported. Up to 50 hits are listed; the status counts all of them.
+    Not applicable when the Markdown is unreadable.
+    """
     md = doc.md
     result = CheckResult("V8", "Character confusion", PASS, "")
     if md is None:
@@ -417,6 +470,12 @@ def check_v8(doc: Document, cfg: SpecvalConfig) -> CheckResult:
 
 
 def check_v9(doc: Document, cfg: SpecvalConfig) -> CheckResult:
+    """V9 acceptance questions from acceptance.yaml for this document.
+
+    Each expected snippet must appear in the Markdown text (both normalized:
+    NFKC, whitespace collapsed; case matters), otherwise fail. Not applicable
+    when no question names this document; unreadable Markdown fails.
+    """
     result = CheckResult("V9", "Acceptance questions", PASS, "")
     questions = [q for q in doc.questions if q.doc == doc.id]
     if not questions:

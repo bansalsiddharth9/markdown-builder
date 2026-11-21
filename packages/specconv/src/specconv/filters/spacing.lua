@@ -6,10 +6,13 @@ with a space ("` top `" shows as "top"), and does not read "*S' *" as
 emphasis (a closing "*" may not follow a space). Pandoc writes both, so the
 text a viewer shows loses spaces or gains asterisks. This filter moves such
 edge whitespace outside the markup; the visible text stays the same.
+
+Runs after anchors.lua (specconv passes it second).
 ]]
 
 local NBSP = "\194\160"
 
+-- Pandoc's inline whitespace elements; a line break at an edge moves out too.
 local function is_space(el)
   return el.t == "Space" or el.t == "SoftBreak" or el.t == "LineBreak"
 end
@@ -47,10 +50,11 @@ local function trim_markup(el)
     end
   end
   if #before == 0 and #after == 0 then
-    return nil
+    return nil -- nil tells Pandoc to keep the element unchanged
   end
   local out = pandoc.Inlines({})
   out:extend(before)
+  -- Markup that held only whitespace disappears; the whitespace stays.
   if #content > 0 then
     el.content = content
     out:insert(el)
@@ -63,6 +67,7 @@ end
 -- CommonMark; write those two spaces outside the code span instead.
 local function Code(code)
   local text = code.text
+  -- Only when there is non-space text: CommonMark keeps all-space code spans as is.
   if #text > 2 and text:sub(1, 1) == " " and text:sub(-1) == " " and text:match("%S") then
     code.text = text:sub(2, -2)
     return { pandoc.Space(), code, pandoc.Space() }

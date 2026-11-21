@@ -1,3 +1,13 @@
+{#- Document page: GET /documents/<job_id>/<doc_id>?tab=... (doc_routes.document_page).
+    Context: doc (documents.details: record, front_matter, validation), job_id,
+    doc_id, tab (selected tab), tabs, report (JSON report or None), queue
+    (review queue items), fail_items (number of fail items), source_kind (pdf,
+    html, htm, docx or None), api and page (URL prefixes), message (result of
+    an approval: "approved" shows as a notice, anything else as an error).
+    Per tab, only one of these is set: rendered (rendered and side-by-side),
+    lines (raw), docx_preview (side-by-side with a DOCX), report_html (report).
+    rendered, docx_preview and report_html are sanitized HTML (render.py),
+    which is why "| safe" is allowed for them. -#}
 {% extends "base.html" %}
 {% from "_macros.html" import pill %}
 {% set nav = "jobs" %}
@@ -33,6 +43,8 @@
 <article class="markdown">{{ rendered | safe }}</article>
 
 {% elif tab == "raw" %}
+{# Every line gets the anchor #L<n>, so review queue items can link to it
+   (deviation WB15). Whitespace inside the pre matters: keep it on these lines. #}
 <pre class="raw">{% for n, line in lines %}<span id="L{{ n }}" class="line"><a class="ln" href="#L{{ n }}">{{ n }}</a>{{ line }}
 </span>{% endfor %}</pre>
 
@@ -40,6 +52,9 @@
 <div class="split">
   <article class="markdown">{{ rendered | safe }}</article>
   <div class="source-pane">
+    {# PDF: the browser's own viewer (the source route sends it without a CSP).
+       HTML: an empty sandbox attribute, so scripts, forms and same-origin
+       access are all off; the server also sends a sandbox CSP. #}
     {% if source_kind == "pdf" %}
       <iframe class="source" src="{{ api }}/source" title="Source PDF"></iframe>
     {% elif source_kind in ("html", "htm") %}
@@ -65,6 +80,8 @@
       <span class="kind k-{{ item.kind }}">{{ item.kind }}</span>
       {% if item.check %}<strong>{{ item.check }}</strong>{% endif %} {{ item.text }}</label>
     {% if item.md_line %} · <a href="{{ page }}?tab=raw#L{{ item.md_line }}">Markdown line {{ item.md_line }}</a>{% endif %}
+    {# PDF locations look like "page 12, ..."; #page=12 opens the PDF viewer at
+       that page. Other locations are element paths, shown as text (WB15). #}
     {% if item.source_loc %} · {% if source_kind == "pdf" and item.source_loc.startswith("page ") %}<a href="{{ api }}/source#page={{ item.source_loc[5:].split(',')[0] }}" target="_blank" rel="noopener">source {{ item.source_loc }}</a>{% else %}source: {{ item.source_loc }}{% endif %}{% endif %}
     {% if item.excerpt %}<blockquote>{{ item.excerpt }}</blockquote>{% endif %}
   </li>
@@ -73,6 +90,10 @@
 {% else %}
 <p>Nothing in the review queue.</p>
 {% endif %}
+{# Approve (deviation WB10): the button starts disabled when there are fail
+   items. static/review.js enables it once every fail item is ticked (and fills
+   fails_reviewed) or an override reason is typed. The server applies specval's
+   rules either way. #}
 <form method="post" action="{{ page }}/approve" class="approve" id="approve-form">
   <label>Your name <input type="text" name="name" maxlength="200"></label>
   <label>Override reason (needed if you approve without ticking every fail item)

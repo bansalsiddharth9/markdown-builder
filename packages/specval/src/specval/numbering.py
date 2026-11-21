@@ -22,6 +22,10 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
+# Start of a heading: either "Annex B" / "Appendix B" (group annex), or a number
+# like "7", "7.3.2", "7.3.2." or "A.1" (group num). Each numeric part has 1-3
+# digits, and the number must be followed by a space or the end of the text.
+# IGNORECASE is for "annex"/"appendix"; section_number() rejects lowercase letters.
 _NUMBER = re.compile(
     r"^\s*(?:(?:annex|appendix)\s+(?P<annex>[A-Z])\b"
     r"|(?P<num>(?:\d{1,3}|[A-Z])(?:\.\d{1,3})*)\.?(?=\s|$))",
@@ -32,6 +36,8 @@ SKIPPED, DUPLICATED, OUT_OF_ORDER = "skipped", "duplicated", "out of order"
 
 
 def section_number(text: str) -> tuple[str, ...] | None:
+    """The section number at the start of a heading as parts ("7", "3", "2"),
+    or None when the heading is not numbered. "Annex B" gives ("B",)."""
     match = _NUMBER.match(text)
     if not match:
         return None
@@ -49,17 +55,23 @@ def label(number: tuple[str, ...]) -> str:
 
 
 def _succ(part: str) -> str:
+    """The next part: "3" -> "4", "A" -> "B"."""
     return chr(ord(part) + 1) if part.isalpha() else str(int(part) + 1)
 
 
 def _key(number: tuple[str, ...]) -> tuple:
+    """Sort key used to tell "out of order" from "skipped"."""
     # numeric sections before annexes; numbers compare as numbers
     return tuple((1, ord(p), 0) if p.isalpha() else (0, 0, int(p)) for p in number)
 
 
 def allowed_next(prev: tuple[str, ...], cur: tuple[str, ...]) -> bool:
-    if cur == prev + ("1",):
+    """True when cur may follow prev in reading order: prev's first child,
+    the next sibling of prev or of one of its ancestors, or the first
+    subsection of a later annex (see the module docstring)."""
+    if cur == prev + ("1",):  # first child: 7.3 -> 7.3.1
         return True
+    # next sibling at any depth: 7.3.2 -> 7.3.3, 7.4 or 8
     for k in range(len(prev)):
         if cur == prev[:k] + (_succ(prev[k]),):
             return True
@@ -72,6 +84,8 @@ def allowed_next(prev: tuple[str, ...], cur: tuple[str, ...]) -> bool:
 
 @dataclass(frozen=True)
 class SequenceProblem:
+    """One heading number that does not follow the one before it."""
+
     index: int  # position in the list checked
     kind: str  # skipped | duplicated | out of order
     number: tuple[str, ...]
@@ -79,6 +93,13 @@ class SequenceProblem:
 
 
 def sequence_problems(numbers: list[tuple[str, ...]]) -> list[SequenceProblem]:
+    """Numbers (in reading order) that break the rules of allowed_next.
+
+    A bad number is classed as duplicated (seen before), out of order (sorts
+    before the previous one) or skipped (a gap). The number after a bad one
+    is also checked against the last good number, so one stray heading gives
+    one problem, not two.
+    """
     problems: list[SequenceProblem] = []
     seen: set[tuple[str, ...]] = set()
     prev: tuple[str, ...] | None = None

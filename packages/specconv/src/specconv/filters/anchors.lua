@@ -23,16 +23,24 @@ ids are kept: "all" (default; HTML, whose heading ids come from the source
 and are linked to from other documents) or "targeted" (DOCX, where Pandoc
 invents heading ids that no other document links to; only ids that a link
 in the document targets, e.g. from a table of contents, are kept).
+
+Only the global Pandoc function below is a filter entry point. It runs the
+local handlers in several explicit walks, because their order matters.
 ]]
 
+-- Ids that some "#id" link in the document points to (filled in Pandoc()).
 local targeted = {}
+-- Ids already written as an anchor or by Pandoc itself, so none is written twice.
 local emitted = {}
+-- false in "targeted" mode (DOCX).
 local all_headings = true
 
+-- Escape a value for use inside a double-quoted HTML attribute.
 local function escape_attr(s)
   return (s:gsub("&", "&amp;"):gsub('"', "&quot;"):gsub("<", "&lt;"):gsub(">", "&gt;"))
 end
 
+-- Empty <a id="…"></a> anchors for the ids not written yet; "" if none is left.
 local function anchor_html(ids)
   local parts = {}
   for _, id in ipairs(ids) do
@@ -44,6 +52,7 @@ local function anchor_html(ids)
   return table.concat(parts)
 end
 
+-- Decode %XX escapes, so "#caf%C3%A9" also marks the id "café" as targeted.
 local function url_decode(s)
   return (s:gsub("%%(%x%x)", function(h) return string.char(tonumber(h, 16)) end))
 end
@@ -71,6 +80,9 @@ local function prepend_to_header(header, ids)
   return header
 end
 
+-- The heading's id becomes an anchor at the start of its text (in "targeted"
+-- mode only if a link points to it). The id itself is always cleared, so the
+-- anchor is the only place it appears.
 local function Header(h)
   if h.identifier ~= "" and (all_headings or targeted[h.identifier]) then
     prepend_to_header(h, { h.identifier })
@@ -81,12 +93,15 @@ end
 
 ------------------------------------------------------------------- divs
 
+-- True for a <section> wrapper with no meaning of its own: only the class
+-- "section" (Pandoc's HTML reader gives every <section> that class) and no other
+-- attributes. Such a wrapper is dropped and its content kept (deviation Q1).
 local function is_plain_section(div)
   if not div.classes:includes("section") or #div.classes ~= 1 then
     return false
   end
   for _ in pairs(div.attributes) do
-    return false
+    return false -- any attribute at all
   end
   return true
 end
@@ -105,6 +120,7 @@ local function Div(div)
         end
         div.identifier = ""
       else
+        -- No heading first: the section id goes on its own line before the content.
         div.identifier = ""
         if is_plain_section(div) then
           local blocks = pandoc.Blocks({})
@@ -123,6 +139,7 @@ local function Div(div)
     end
     return div
   end
+  -- Any other div: keep its id only if a link targets it (deviation I3).
   if id ~= "" then
     div.identifier = ""
     if is_targeted(id) then
@@ -148,6 +165,7 @@ local function fenced(cb)
     longest = math.max(longest, #run)
   end
   local fence = string.rep("`", math.max(3, longest + 1))
+  -- A raw gfm block is copied to the output as is (deviation Q16).
   return pandoc.RawBlock("gfm", fence .. "\n" .. cb.text .. "\n" .. fence)
 end
 
@@ -160,6 +178,7 @@ local function CodeBlock(cb)
   return fenced(cb)
 end
 
+-- A targeted figure id becomes an anchor before the figure.
 local function Figure(fig)
   local id = fig.identifier
   if is_targeted(id) then
@@ -169,6 +188,7 @@ local function Figure(fig)
   return fig
 end
 
+-- Call fn on every row of a table: head, each body's head and body rows, foot.
 local function each_row(tbl, fn)
   for _, row in ipairs(tbl.head.rows) do fn(row) end
   for _, body in ipairs(tbl.bodies) do
@@ -187,6 +207,8 @@ local function Table(tbl)
   if is_targeted(id) then
     ids[#ids + 1] = id
   end
+  -- Write the table alone to see what Pandoc will choose: a pipe table, or raw
+  -- HTML for tables a pipe table cannot express (e.g. merged cells or block content).
   local written = pandoc.write(pandoc.Pandoc({ tbl }), "gfm", { wrap_text = "none" })
   local is_pipe = written:match("^%s*|") ~= nil
   if is_pipe then
@@ -217,6 +239,8 @@ end
 
 --------------------------------------------------------- inline elements
 
+-- Inline code and images: a targeted id becomes an anchor just before the
+-- element; other ids are dropped.
 local function inline_with_anchor(el)
   local id = el.identifier
   if id ~= "" then
@@ -250,13 +274,15 @@ end
 function Pandoc(doc)
   local mode = doc.meta["anchor-headings"]
   if mode ~= nil then
+    -- Metadata from -M arrives as Inlines; turn it into a plain string.
     mode = pandoc.utils.stringify(mode)
     if mode ~= "all" and mode ~= "targeted" then
       error("anchor-headings must be 'all' or 'targeted', got '" .. mode .. "'")
     end
     all_headings = mode == "all"
-    doc.meta["anchor-headings"] = nil
+    doc.meta["anchor-headings"] = nil -- a setting for this filter, not document metadata
   end
+  -- First pass: collect every in-page link target, raw and percent-decoded.
   doc:walk({
     Link = function(l)
       local t = l.target

@@ -2,7 +2,7 @@
 
 A grid is a table as rows of cell texts with row and column spans expanded:
 a merged cell's text is repeated in every position it covers, on both sides,
-so a span that is lost or moved shows up as differing cells.
+so a span that is lost or moved shows up as differing cells (deviations V-v).
 """
 
 from __future__ import annotations
@@ -18,6 +18,8 @@ Grid = list[list[str]]
 
 
 def _span(cell: Tag, name: str) -> int:
+    """A cell's colspan or rowspan: 1 when missing or not a number, at most
+    1000 so a broken value cannot build a huge grid."""
     try:
         return max(1, min(int(str(cell.get(name, "1")).strip() or 1), 1000))
     except ValueError:
@@ -40,6 +42,7 @@ def _expand(table: Tag, value) -> list[list]:
         row: list = []
         c = 0
         for cell in tr.find_all(["td", "th"], recursive=False):
+            # Fill positions taken by rowspans from above before placing this cell.
             while (r, c) in pending:
                 row.append(pending.pop((r, c)))
                 c += 1
@@ -50,6 +53,7 @@ def _expand(table: Tag, value) -> list[list]:
                 for dr in range(1, rowspan):
                     pending[(r + dr, c + dc)] = item
             c += colspan
+        # Rowspans from above that reach past this row's last cell.
         while (r, c) in pending:
             row.append(pending.pop((r, c)))
             c += 1
@@ -69,6 +73,8 @@ def html_grid_lines(table: Tag, line_of) -> list[list[int]]:
 
 @dataclass(frozen=True)
 class TableProblem:
+    """One difference V5 found between a source grid and a Markdown grid."""
+
     kind: str  # cell | missing row | extra row | columns
     row: int  # 1-based row in the source grid (in the Markdown grid for "extra row")
     col: int | None
@@ -92,10 +98,20 @@ def _trimmed(row: list[str]) -> list[str]:
 
 
 def compare_grids(source: Grid, markdown: Grid) -> list[TableProblem]:
+    """Differences between two grids for V5 (HTML and DOCX); each one fails.
+
+    Rows are aligned with difflib, so a missing or extra row is reported once
+    instead of shifting every row after it. Rows that line up but differ are
+    compared cell by cell; a row with another number of cells gives one
+    "columns" problem. Empty cells at the end of a row are ignored (deviations
+    HP2).
+    """
     source = [_trimmed(row) for row in source]
     markdown = [_trimmed(row) for row in markdown]
     offset = 0
-    # Pandoc writes an empty header row for a table that has none.
+    # Pandoc writes an empty header row for a table that has none. Skip it only
+    # when the Markdown has more rows than the source; offset keeps md_row
+    # pointing at the right row of the untrimmed Markdown grid.
     while markdown and not any(markdown[0]) and len(markdown) > len(source):
         markdown = markdown[1:]
         offset += 1
@@ -106,6 +122,8 @@ def compare_grids(source: Grid, markdown: Grid) -> list[TableProblem]:
     for op, a0, a1, b0, b1 in matcher.get_opcodes():
         if op == "equal":
             continue
+        # In a "replace", pair rows one to one; any rows left over on one side
+        # are missing or extra rows.
         paired = min(a1 - a0, b1 - b0) if op == "replace" else 0
         for k in range(paired):
             src_row, md_row = source[a0 + k], markdown[b0 + k]
@@ -134,6 +152,7 @@ def compare_grids(source: Grid, markdown: Grid) -> list[TableProblem]:
 
 
 def describe(number: int, p: TableProblem) -> str:
+    """The report message for a problem in table number (1-based)."""
     if p.kind == "cell":
         return (
             f"table {number}, row {p.row}, column {p.col}: "

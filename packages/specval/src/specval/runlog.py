@@ -19,6 +19,13 @@ def run_timestamp() -> str:
 
 @contextmanager
 def run_logging(log_file: Path, verbose: bool = False) -> Iterator[logging.Logger]:
+    """Log to ``log_file`` (DEBUG and up) and stderr while the block runs.
+
+    The log file is validation/run-<timestamp>.log (deviation C6). stderr
+    shows INFO and up, or DEBUG with ``verbose``. The handlers are removed and
+    closed on exit, so repeated runs in one process (tests, the web app) do not
+    print every message several times.
+    """
     log_file.parent.mkdir(parents=True, exist_ok=True)
     logger = logging.getLogger(LOGGER_NAME)
     logger.setLevel(logging.DEBUG)

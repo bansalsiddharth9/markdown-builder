@@ -1,3 +1,9 @@
+{#- Job status and documents fragment: included by job.html, and served alone by
+    GET /jobs/<id>/documents (app.job_documents) for HTMX polling.
+    Context: job (job dict with documents), running (the RUNNING states).
+    While the job is queued or running, HTMX fetches this fragment every 2 s
+    and replaces the whole div (outerHTML). Once the job is done or failed the
+    answer has no hx-get, so the polling stops. -#}
 {% from "_macros.html" import pill %}
 <div id="job-documents"
      {% if job.status in running or job.status == "queued" %}hx-get="/jobs/{{ job.id }}/documents" hx-trigger="every 2s" hx-swap="outerHTML"{% endif %}>
@@ -10,6 +16,8 @@
     <tr>
       <td>{{ doc.source_name }}{% if doc.render == "browser" %} (browser){% endif %}</td>
       <td>{{ doc.source_type }}</td>
+      {# Link only documents that have Markdown to show ("ok", or unchanged since
+         an earlier conversion); others show their id without a link. #}
       <td>{% if doc.doc_id and doc.status in ("ok", "skipped_unchanged") %}<a href="/documents/{{ job.id }}/{{ doc.doc_id }}">{{ doc.doc_id }}</a>{% elif doc.doc_id %}{{ doc.doc_id }}{% endif %}{% if doc.approved_at %} ✓ approved{% endif %}</td>
       <td>{{ pill(doc.status) }}{% if doc.error %}<br><small>{{ doc.error }}</small>{% endif %}</td>
       <td>{% if doc.validation_status %}{{ pill(doc.validation_status) }}{% endif %}</td>

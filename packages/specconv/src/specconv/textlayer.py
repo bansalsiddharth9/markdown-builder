@@ -25,6 +25,8 @@ class PdfReadError(ValueError):
 
 @dataclass
 class TextLayer:
+    """Per-page text counts of one PDF."""
+
     pages: int
     text_pages: int
     pages_without_text: list[int] = field(default_factory=list)  # 1-based
@@ -32,13 +34,16 @@ class TextLayer:
 
     @property
     def ratio(self) -> float:
+        """Share of pages with a text layer (0.0 for an empty PDF)."""
         return self.text_pages / self.pages if self.pages else 0.0
 
     @property
     def mixed(self) -> bool:
+        """True when some pages have text and some do not."""
         return 0 < self.text_pages < self.pages
 
     def summary(self) -> dict[str, object]:
+        """Short form for conversion.json; leaves out the per-page counts."""
         return {
             "pages": self.pages,
             "text_pages": self.text_pages,
@@ -48,6 +53,11 @@ class TextLayer:
 
 
 def check_text_layer(path: Path, cfg: PdfConfig) -> TextLayer:
+    """Count non-whitespace characters pypdf extracts from each page.
+
+    Raises PdfReadError for damaged, empty or password-protected PDFs (deviation Q10).
+    An encrypted PDF that opens with the empty password is read normally.
+    """
     from pypdf import PdfReader
     from pypdf.errors import PyPdfError
 
@@ -57,6 +67,7 @@ def check_text_layer(path: Path, cfg: PdfConfig) -> TextLayer:
         reader = PdfReader(path)
         if reader.is_encrypted:
             try:
+                # Many PDFs are "encrypted" only to set permissions; the empty password opens them.
                 if not reader.decrypt(""):
                     raise PdfReadError("PDF is password protected")
             except PyPdfError as exc:

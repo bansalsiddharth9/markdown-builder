@@ -4,6 +4,10 @@ service is needed on one host. The worker process runs
     huey_consumer specweb.tasks.huey -w <worker_concurrency>
 
 (or `specweb worker`). The queue file is data/queue.sqlite.
+
+The web server only puts tasks in the queue (enqueue); the worker process
+runs them. Both import this module, and both must see the same
+$SPECWEB_DATA (cli._load sets it).
 """
 
 from __future__ import annotations
@@ -15,6 +19,7 @@ from huey import SqliteHuey, crontab
 
 from specweb.settings import WebConfig
 
+# Read once, at import: Huey needs the file when the module loads.
 _DATA = Path(os.environ.get("SPECWEB_DATA", "data"))
 _DATA.mkdir(parents=True, exist_ok=True)
 
@@ -23,6 +28,10 @@ huey = SqliteHuey("specweb", filename=str(_DATA / "queue.sqlite"), immediate=Fal
 
 @huey.task()
 def process_job_task(job_id: str, config: dict) -> None:
+    """Run one job in the worker. The web server's config comes with the task,
+    as a dict, so both processes use the same settings."""
+    # Imported here: the web server, which also imports this module, does
+    # not need the worker code.
     from specweb import worker
 
     worker.process_job(WebConfig.from_dict(config), job_id)
@@ -38,4 +47,5 @@ def purge_expired_jobs() -> None:
 
 
 def enqueue(cfg: WebConfig, job_id: str) -> None:
+    """Put a job in the queue for the worker."""
     process_job_task(job_id, cfg.to_dict())

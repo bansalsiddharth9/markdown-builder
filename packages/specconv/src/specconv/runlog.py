@@ -19,6 +19,12 @@ def run_timestamp() -> str:
 
 @contextmanager
 def run_logging(log_file: Path, verbose: bool = False) -> Iterator[logging.Logger]:
+    """Attach a file handler and a console handler to the specconv logger for one run.
+
+    The file gets every level; the console gets INFO and above (DEBUG with verbose).
+    Both handlers are removed and closed on exit, so repeated runs in one process
+    (tests, the web worker) do not log twice.
+    """
     log_file.parent.mkdir(parents=True, exist_ok=True)
     logger = logging.getLogger(LOGGER_NAME)
     logger.setLevel(logging.DEBUG)

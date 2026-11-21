@@ -1,3 +1,6 @@
+{#- Shared macros. Import with: from "_macros.html" import pill. -#}
+{# pill(value): a status as a coloured pill. The CSS class s-<value> picks the
+   colour (style.css, "pills"), so new statuses need a rule there. #}
 {% macro pill(value) -%}
 <span class="pill s-{{ value }}"><span class="dot"></span>{{ value }}</span>
 {%- endmacro %}

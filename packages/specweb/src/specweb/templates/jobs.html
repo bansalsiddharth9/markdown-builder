@@ -1,3 +1,8 @@
+{#- Jobs page: GET /jobs (app.jobs_page). All jobs, newest first.
+    Context (app._jobs_context): jobs (list of job dicts), status (current
+    filter or None), statuses (all job states), any_running, disk
+    ({data_mb, free_mb}); plus message, a notice after a job was deleted.
+    The table is _jobs_table.html, which refreshes itself while jobs run. -#}
 {% extends "base.html" %}
 {% set nav = "jobs" %}
 {% block title %}Jobs · Spec converter{% endblock %}

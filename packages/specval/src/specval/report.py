@@ -21,33 +21,47 @@ from pathlib import Path
 from specval.model import FAIL, INFO, WARN
 from specval.runner import CHECK_ORDER, DocReport
 
+# Review queue kinds (see specval.review) and their headings, in reading order.
 QUEUE_SECTIONS = (
     ("fail", "1. Failures"),
     ("table", "2. Tables to check (always reviewed)"),
     ("warn", "3. Warnings"),
     ("sample", "4. Random sample"),
 )
+# Columns of summary.csv; one column per check, holding its status.
 SUMMARY_FIELDS = ("id", "source_type", "overall", *CHECK_ORDER, "fails", "warnings", "validated_at")
 
 
 def _write_atomic(path: Path, text: str) -> None:
+    """Write UTF-8 text via a hidden temp file and a rename.
+
+    A reader (such as the web UI) never sees a half-written report.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(f".{path.name}.tmp")
-    tmp.write_bytes(text.encode("utf-8"))
+    tmp.write_bytes(text.encode("utf-8"))  # bytes: no newline translation on Windows
     os.replace(tmp, path)
 
 
 def write_json(report: DocReport, folder: Path) -> Path:
+    """Write <folder>/<id>.json (the full report) and return its path."""
     path = folder / f"{report.id}.json"
     _write_atomic(path, json.dumps(report.to_dict(), indent=2, ensure_ascii=False) + "\n")
     return path
 
 
 def _cell(text: str) -> str:
+    """Make text safe for one Markdown table cell or one quoted line."""
     return text.replace("|", "\\|").replace("\n", " ")
 
 
 def render_markdown(report: DocReport) -> str:
+    """The human report: header, results table, review queue, info findings.
+
+    A document without checks (not converted) gets only the header and notes.
+    Every queue section is shown, with "None." when empty, so the reader
+    knows nothing was left out.
+    """
     e = report.entry
     out = [
         f"# Validation report: {report.id}",
@@ -99,12 +113,17 @@ def render_markdown(report: DocReport) -> str:
 
 
 def write_markdown(report: DocReport, folder: Path) -> Path:
+    """Write <folder>/<id>.md (the human report) and return its path."""
     path = folder / f"{report.id}.md"
     _write_atomic(path, render_markdown(report))
     return path
 
 
 def summary_row(report: DocReport) -> dict[str, str]:
+    """One summary.csv row: overall status, status per check, finding counts.
+
+    Check columns are empty when the document has no checks (not converted).
+    """
     row = {
         "id": report.id,
         "source_type": report.entry.source_type,
@@ -121,13 +140,16 @@ def summary_row(report: DocReport) -> dict[str, str]:
 
 def write_summary(reports: list[DocReport], folder: Path, keep_others: set[str] | None) -> Path:
     """Write summary.csv. With keep_others (ids still in the manifest), rows of
-    documents not validated in this run are kept (specval run --doc)."""
+    documents not validated in this run are kept (specval run --doc,
+    deviation V-r). Without it the file is rebuilt from ``reports`` only, so
+    documents removed from the manifest drop out. Rows are sorted by id."""
     path = folder / "summary.csv"
     rows: dict[str, dict[str, str]] = {}
     if keep_others is not None and path.is_file():
         with path.open(encoding="utf-8", newline="") as fh:
             for row in csv.DictReader(fh):
                 if row.get("id") in keep_others:
+                    # Only known columns: an older file may have other ones.
                     rows[row["id"]] = {k: row.get(k, "") for k in SUMMARY_FIELDS}
     for report in reports:
         rows[report.id] = summary_row(report)

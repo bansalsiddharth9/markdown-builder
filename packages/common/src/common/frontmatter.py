@@ -23,6 +23,8 @@ from typing import Any
 import yaml
 
 DELIMITER = "---"
+# No "doc" here, unlike the manifest: .doc files are never converted, so they
+# never get a Markdown file.
 SOURCE_TYPES = frozenset({"pdf", "html", "docx", "web"})
 
 
@@ -38,15 +40,15 @@ class FrontMatter:
     title: str = ""  # filled by hand
     spec_version: str = ""  # filled by hand
     source_type: str = "pdf"  # pdf | html | docx | web
-    source_file: str = ""
+    source_file: str = ""  # input file name; empty for web sources (deviation F11)
     source_url: str | None = None  # set for web sources
-    source_sha256: str = ""
+    source_sha256: str = ""  # of source.<ext>; V7 checks it (deviation V-m)
     fetched_at: str | None = None  # set for web sources, ISO 8601 UTC
     converted_with: str = ""  # e.g. "docling 2.151.0"
     converted_at: str = ""  # ISO 8601 UTC
-    flags: list[str] = field(default_factory=list)
+    flags: list[str] = field(default_factory=list)  # e.g. mixed_text_layer, suspect_empty
     manual_fixes: list[Any] = field(default_factory=list)  # edited by hand
-    # Set by `specval approve`: {date, validator, by}; null until reviewed.
+    # Set by `specval approve`: {date, validator, by}; null until reviewed (deviation D2).
     validated: dict[str, Any] | None = None
 
     def validate(self) -> None:
@@ -79,10 +81,16 @@ class FrontMatter:
             raise FrontMatterError("invalid front matter: " + "; ".join(problems))
 
     def to_dict(self) -> dict[str, Any]:
+        """All fields in declaration order, which is the order they are written."""
         return {f.name: getattr(self, f.name) for f in fields(self)}
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> FrontMatter:
+        """Build and validate front matter from parsed YAML.
+
+        Unknown fields are an error, not ignored, so a typo in a hand edit is
+        caught. Missing fields other than id get their defaults.
+        """
         known = {f.name for f in fields(cls)}
         unknown = set(data) - known
         if unknown:
@@ -95,8 +103,13 @@ class FrontMatter:
 
 
 def _normalize(value: Any) -> Any:
-    """YAML turns unquoted dates into date objects; keep them as ISO strings."""
+    """YAML turns unquoted dates into date objects; keep them as ISO strings.
+
+    Works through nested dicts and lists (e.g. ``validated.date``).
+    """
+    # datetime first: it is a subclass of date.
     if isinstance(value, dt.datetime):
+        # UTC is written with "Z", as the converter writes its own timestamps.
         if value.tzinfo is not None and value.utcoffset() == dt.timedelta(0):
             return value.replace(tzinfo=None).isoformat() + "Z"
         return value.isoformat()
@@ -110,7 +123,14 @@ def _normalize(value: Any) -> Any:
 
 
 def split_front_matter(text: str) -> tuple[str | None, str]:
-    """Return (raw YAML or None, body). Body is everything after the closing line."""
+    """Return (raw YAML or None, body). Body is everything after the closing line.
+
+    The file must start with a '---' line; otherwise there is no front matter
+    and the whole text is the body. An opening line without a closing one
+    raises FrontMatterError.
+    """
+    # Split on "\n" only and strip "\r" when comparing, so files with Windows
+    # line endings work and the body is returned byte for byte.
     lines = text.split("\n")
     if not lines or lines[0].rstrip("\r") != DELIMITER:
         return None, text
@@ -121,7 +141,10 @@ def split_front_matter(text: str) -> tuple[str | None, str]:
 
 
 def parse_document(text: str) -> tuple[FrontMatter, str]:
-    """Parse a converted Markdown file into its front matter and body."""
+    """Parse a converted Markdown file into its front matter and body.
+
+    Raises FrontMatterError if there is no front matter or it is invalid.
+    """
     raw, body = split_front_matter(text)
     if raw is None:
         raise FrontMatterError("document has no front matter")
@@ -135,12 +158,16 @@ def parse_document(text: str) -> tuple[FrontMatter, str]:
 
 
 def render_front_matter(fm: FrontMatter) -> str:
-    """Render front matter, including both '---' lines and a trailing newline."""
+    """Render front matter, including both '---' lines and a trailing newline.
+
+    Validates first, so invalid front matter is never written.
+    """
     fm.validate()
     body = yaml.safe_dump(
         fm.to_dict(),
         sort_keys=False,
         allow_unicode=True,
+        # Lists and mappings of plain values inline ([a, b], {k: v}); nested ones as blocks.
         default_flow_style=None,
         width=10_000,  # never wrap long values
     )

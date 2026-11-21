@@ -1,3 +1,7 @@
+{#- Library page: GET /library (doc_routes.library_page).
+    Context: items, from documents.library(): the latest version of each
+    approved document (its meta.json, plus "versions", the number of
+    versions). The .md link points at /library/<doc_id>/<version>/... -#}
 {% extends "base.html" %}
 {% set nav = "library" %}
 {% block title %}Library · Spec converter{% endblock %}

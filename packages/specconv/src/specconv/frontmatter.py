@@ -25,6 +25,8 @@ class Previous:
 
 @dataclass
 class CarryOver:
+    """The front matter to write, plus warnings for the manifest."""
+
     front_matter: FrontMatter
     warnings: list[str] = field(default_factory=list)
 
@@ -49,9 +51,16 @@ def read_previous(md_path: Path) -> Previous | None:
 
 
 def carry_over(new: FrontMatter, new_body: str, previous: Previous | None) -> CarryOver:
+    """Copy hand-edited fields from the previous file into the new front matter.
+
+    Raises FrontMatterError when the previous file belongs to another source or id
+    (deviation P7), so hand-edited fields never move to the wrong document. When the
+    body changed, ``validated`` is reset and a manual_fixes warning is added (P8).
+    """
     if previous is None:
         return CarryOver(new)
     old = previous.front_matter
+    # Web sources have no source_file, local files no source_url.
     old_source = (old.source_type, old.source_url or old.source_file)
     new_source = (new.source_type, new.source_url or new.source_file)
     if old.id != new.id or old_source != new_source:

@@ -41,6 +41,11 @@ class PandocConverter:
     FORMATS = ("html", "docx")
 
     def __init__(self, from_format: str, pandoc: Path | None = None) -> None:
+        """Set up for one input format ("html" or "docx").
+
+        Raises ConversionError when Pandoc or the anchors filter is missing, so the
+        problem is reported before any document is touched.
+        """
         if from_format not in self.FORMATS:
             raise ValueError(f"unsupported Pandoc input format {from_format!r}")
         found = pandoc or find_pandoc()
@@ -57,11 +62,13 @@ class PandocConverter:
         self.anchor_headings = "all" if from_format == "html" else "targeted"
 
     def version(self) -> str:
+        """Pandoc's version, asked once and then cached."""
         if self._version is None:
             self._version = pandoc_version(self.pandoc)
         return self._version
 
     def options(self) -> dict[str, object]:
+        """The options used, for the manifest. Must match command() (they feed the options hash)."""
         opts: dict[str, object] = {
             "from": f"{self.from_format}-auto_identifiers",
             "to": "gfm",
@@ -77,6 +84,7 @@ class PandocConverter:
         return opts
 
     def command(self, src: Path) -> list[str]:
+        """The Pandoc command line. The source path is absolute because Pandoc runs in out_dir."""
         cmd = [
             str(self.pandoc),
             str(src.resolve()),
@@ -85,6 +93,7 @@ class PandocConverter:
             f"{self.from_format}-auto_identifiers",
         ]
         if self.from_format == "docx":
+            # Accept tracked changes: the Markdown shows the document as it reads now.
             cmd.append("--track-changes=accept")
         cmd += [
             "-t",
@@ -97,10 +106,18 @@ class PandocConverter:
             f"--lua-filter={SPACING_FILTER}",
         ]
         if self.from_format == "docx":
+            # Relative to the working directory (out_dir), so links come out as "media/…".
+            # HTML gets no --extract-media: htmlprep copies its images (deviation Q4).
             cmd.append(f"--extract-media={MEDIA_DIR}")
         return cmd
 
     def convert(self, src: Path, out_dir: Path) -> ConversionResult:
+        """Run Pandoc on src inside out_dir and return its Markdown.
+
+        A non-zero exit, a timeout or non-UTF-8 output raises ConversionError.
+        Every non-empty stderr line becomes a warning. The media list holds every
+        file under out_dir/media, including images htmlprep copied there earlier.
+        """
         out_dir.mkdir(parents=True, exist_ok=True)
         start = time.monotonic()
         try:

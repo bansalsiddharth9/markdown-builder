@@ -28,6 +28,7 @@ import yaml
 from specweb.db import Document, Job, sessions
 from specweb.settings import WebConfig
 
+# Accepted upload extensions and the source type each one maps to.
 ALLOWED_EXTENSIONS = {".pdf": "pdf", ".html": "html", ".htm": "html", ".docx": "docx"}
 RENDER_MODES = ("static", "browser")
 
@@ -38,30 +39,48 @@ class JobError(ValueError):
 
 @dataclass(frozen=True)
 class Upload:
+    """An uploaded file, read fully into memory (after the size checks)."""
+
     filename: str
     data: bytes
 
 
 @dataclass(frozen=True)
 class UrlSource:
+    """A URL to fetch; render is "static" or "browser" (JavaScript-built pages)."""
+
     url: str
     render: str = "static"
 
 
 def job_folder(cfg: WebConfig, job_id: str) -> Path:
+    """data/jobs/<job_id>. Raises JobError unless job_id is 12 hex characters.
+
+    This is the path-safety check for every route that takes a job id: an id
+    such as "../x" can never reach the file system.
+    """
     if not re.fullmatch(r"[0-9a-f]{12}", job_id):
         raise JobError("invalid job id")
     return cfg.data_dir / "jobs" / job_id
 
 
 def slugify(text: str, limit: int = 60) -> str:
+    """Lowercase ASCII letters and digits joined by '-', at most limit characters.
+
+    Accents are dropped (é -> e); other characters become '-'.
+    """
     text = unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode("ascii")
     return re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")[:limit].strip("-")
 
 
 def safe_name(filename: str, taken: set[str]) -> str:
     """A storage name from the uploaded name: its last path part only (both
-    separators), ASCII letters, digits and '-', lowercase extension."""
+    separators), ASCII letters, digits and '-', lowercase extension.
+
+    The user's file name is never used as a path (deviation WB4): this blocks
+    path traversal and odd characters. Clashes within the job get -2, -3, ...
+    The name is added to taken.
+    """
     base = PureWindowsPath(PurePosixPath(filename).name).name
     stem, dot, ext = base.rpartition(".")
     if not dot:
@@ -77,6 +96,10 @@ def safe_name(filename: str, taken: set[str]) -> str:
 
 
 def url_id(url: str, taken: set[str]) -> str:
+    """A unique id for a URL in sources.yaml, from its host and path.
+
+    Clashes get -2, -3, ...; the id is added to taken.
+    """
     parts = urlsplit(url)
     base = slugify(f"{parts.hostname or ''} {parts.path}") or "page"
     candidate, n = base, 2
@@ -88,6 +111,12 @@ def url_id(url: str, taken: set[str]) -> str:
 
 
 def check_submission(uploads: list[Upload], urls: list[UrlSource], split: int | None) -> None:
+    """Raise JobError for an empty job, a wrong extension, a non-http(s) URL,
+    an unknown render mode or a split level outside 1 to 6.
+
+    Only the extension is checked here; security.check_content checks the
+    file content.
+    """
     if not uploads and not urls:
         raise JobError("no files or URLs: add at least one")
     for upload in uploads:
@@ -106,6 +135,10 @@ def check_submission(uploads: list[Upload], urls: list[UrlSource], split: int | 
 
 
 def parse_urls_json(text: str | None) -> list[UrlSource]:
+    """The API's `urls` field: a JSON list of {url, render} or plain URL strings.
+
+    Raises JobError for anything else. render defaults to "static".
+    """
     if not text:
         return []
     try:
@@ -136,6 +169,11 @@ def parse_urls_text(text: str | None) -> list[UrlSource]:
 
 
 def parse_split(value: str | int | None) -> int | None:
+    """The split level from a form or API field; None when empty.
+
+    Raises JobError if it is not a number. The range is checked by
+    check_submission.
+    """
     if value in (None, ""):
         return None
     try:
@@ -152,8 +190,14 @@ def create_job(
     submitted_by: str | None,
     client_ip: str | None = None,
 ) -> Job:
+    """Check the submission, write the job folder and add the job and its
+    documents to the database. Returns the job with its documents loaded.
+
+    Raises JobError for an unacceptable submission. Does not queue the job
+    (api.submit does that).
+    """
     check_submission(uploads, urls, split)
-    job_id = secrets.token_hex(6)
+    job_id = secrets.token_hex(6)  # 12 hex characters: random, so ids cannot be guessed
     folder = job_folder(cfg, job_id)
     (folder / "input").mkdir(parents=True)
     taken: set[str] = set()
@@ -169,6 +213,7 @@ def create_job(
             )
         )
     if urls:
+        # URL ids must not clash with file ids: both become specconv document ids.
         ids: set[str] = {PurePosixPath(n).stem for n in taken}
         sources = []
         for source in urls:
@@ -194,9 +239,10 @@ def create_job(
         session.add(job)
         session.commit()
         session.refresh(job)
-        _ = job.documents
+        _ = job.documents  # load them now; the session closes below
     return job
 
 
 def delete_job_files(cfg: WebConfig, job_id: str) -> None:
+    """Delete the job's folder. Missing files are not an error."""
     shutil.rmtree(job_folder(cfg, job_id), ignore_errors=True)
