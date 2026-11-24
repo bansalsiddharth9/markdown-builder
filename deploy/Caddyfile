@@ -1,6 +1,16 @@
 # HTTPS with Caddy's internal certificate authority (design: Transport).
 # Install Caddy's root certificate on clients, or replace "tls internal"
 # with the company's certificate files.
+# SPECWEB_HOST may list several names and IPs, comma-separated (HP7).
+
+# Global options.
+{
+	# A browser opening https://<IP> sends no server name (SNI may not carry an
+	# IP), and behind Docker's NAT Caddy cannot tell which address was dialled,
+	# so it would refuse the connection. Treat such visitors as this name (HP7).
+	default_sni {$SPECWEB_DEFAULT_SNI:localhost}
+}
+
 {$SPECWEB_HOST:localhost} {
 	tls internal
 	encode gzip

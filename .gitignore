@@ -10,3 +10,5 @@ data/
 input/*
 !input/.gitkeep
 models/
+# Per-server Docker settings (names, IPs); deploy/.env.example is the template.
+deploy/.env

@@ -123,11 +123,17 @@ uv run specweb worker --config deploy/specweb.yaml
 
 Then open http://localhost:8000. `deploy/specweb.yaml` is the only settings file, for local runs and Docker alike; the Docker image keeps its data on the `/data` volume (`SPECWEB_DATA`).
 
-Deploy with Docker Compose (web, worker and a Caddy proxy with HTTPS, sharing one data volume):
+Deploy with Docker Compose (web, worker and a Caddy proxy with HTTPS, sharing one data volume). First tell Caddy the addresses users will type: copy the template and fill in this server's name and IP (`hostname`, `hostname -I`):
 
 ```bash
-SPECWEB_HOST=specs.intranet docker compose -f deploy/docker-compose.yml up -d --build
+cp deploy/.env.example deploy/.env
+# edit deploy/.env, e.g.
+#   SPECWEB_HOST=wks0019, 192.168.4.161
+#   SPECWEB_DEFAULT_SNI=192.168.4.161
+docker compose -f deploy/docker-compose.yml up -d --build
 ```
+
+Caddy answers only the names and IPs in `SPECWEB_HOST`; anything else is refused. `SPECWEB_DEFAULT_SNI` makes `https://<IP>` work (browsers send no site name for an IP). `deploy/.env` belongs to one server and is git-ignored; without it, the site opens only as `https://localhost` on the server itself. Caddy makes its own certificate, so browsers warn until Caddy's root certificate is installed on them (or the Caddyfile uses the company's certificate). Changes to `deploy/.env` or the Caddyfile need only `docker compose -f deploy/docker-compose.yml up -d --force-recreate proxy`, no rebuild.
 
 The image contains Pandoc, Chromium and the pinned Docling models. Give the worker about 8 GB of memory per PDF conversion; `worker_concurrency` in `deploy/specweb.yaml` sets how many run at once.
 

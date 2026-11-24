@@ -27,6 +27,11 @@ services:
       - web
     # Docling needs about 6 GB per PDF being converted (phase 8 measurement).
     mem_limit: 8g
+    # The image's HEALTHCHECK asks for the web page on port 8000, which only
+    # `web` serves, so the worker was always "unhealthy". Off for now (HP8); a
+    # real worker check (`specweb health`) is future scope (FS-25).
+    healthcheck:
+      disable: true
 
   proxy:
     image: caddy:2.10.2
@@ -35,6 +40,8 @@ services:
       - "443:443"
     environment:
       SPECWEB_HOST: ${SPECWEB_HOST:-localhost}
+      # Certificate for browsers that send no name, i.e. https://<IP> (HP7).
+      SPECWEB_DEFAULT_SNI: ${SPECWEB_DEFAULT_SNI:-localhost}
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data

@@ -7,8 +7,10 @@ ENV PYTHONUNBUFFERED=1 \
     UV_PYTHON_DOWNLOADS=never \
     PLAYWRIGHT_BROWSERS_PATH=/app/.playwright
 
+# libatomic1: Playwright's bundled Node.js needs it before `playwright install --with-deps`
+# can install Chromium's other libraries; the slim base image does not ship it.
 RUN apt-get update \
- && apt-get install -y --no-install-recommends ca-certificates curl \
+ && apt-get install -y --no-install-recommends ca-certificates curl libatomic1 \
  && rm -rf /var/lib/apt/lists/*
 
 # Pandoc 3.14 (GPL-2.0, run as a separate program).
