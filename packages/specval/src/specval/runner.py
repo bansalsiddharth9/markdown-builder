@@ -32,7 +32,7 @@ log = logging.getLogger("specval.runner")
 
 # Run order of the check functions; reports list results in CHECK_ORDER instead.
 CHECKS = (*CORE_CHECKS, check_v3, check_v5, check_v6, check_v8, check_v9)
-CHECK_ORDER = ("V1", "V2", "V3", "V4", "V5", "V6", "V7", "V8", "V9")
+CHECK_ORDER = tuple(f"Validation{n}" for n in range(1, 10))  # check ids (deviation V-ad)
 # Manifest statuses that mean the Markdown exists and can be checked.
 CONVERTED = frozenset({"ok", "skipped_unchanged"})
 # Statuses that make the run exit 1; "unsupported" does not (deviation V-o). Since
@@ -237,10 +237,10 @@ def validate_document(
     # A missing or unreadable Markdown file is a V7 failure even if V7 did not
     # report it, so the document can never pass.
     if md is None:
-        report.checks[CHECK_ORDER.index("V7")].findings.insert(
+        report.checks[CHECK_ORDER.index("Validation7")].findings.insert(
             0, Finding(FAIL, f"{md_path.name} not readable")
         )
-        report.checks[CHECK_ORDER.index("V7")].status = FAIL
+        report.checks[CHECK_ORDER.index("Validation7")].status = FAIL
     report.overall = overall([c.status for c in report.checks])
     report.review_queue = build_queue(entry.id, report.checks, md, reference, cfg)
     # Recorded so specval approve can refuse a file edited after this report.

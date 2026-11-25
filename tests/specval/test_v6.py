@@ -53,7 +53,7 @@ def test_code_comparison_ignores_trailing_space_and_line_endings_only() -> None:
 
 def test_unmodified_html_and_docx_code_pass(out: Path) -> None:
     for kind in ("html", "docx"):
-        v6 = check(validate(out, DOC_IDS[kind]), "V6")
+        v6 = check(validate(out, DOC_IDS[kind]), "Validation6")
         assert v6.status == "pass", (kind, [f.message for f in v6.findings])
         assert v6.details["compared"] == 2
 
@@ -62,7 +62,7 @@ def test_deleted_closing_xml_tag_fails_v6(out: Path) -> None:
     for kind in ("html", "docx"):
         doc_id = DOC_IDS[kind]
         line = mutate(out, doc_id, "    </div>\n", "")
-        v6 = check(validate(out, doc_id), "V6")
+        v6 = check(validate(out, doc_id), "Validation6")
         assert v6.status == "fail"
         messages = [f.message for f in v6.findings]
         assert any(m.startswith("XML not well-formed") for m in messages), messages
@@ -73,7 +73,7 @@ def test_deleted_closing_xml_tag_fails_v6(out: Path) -> None:
 def test_broken_webvtt_timing_fails_v6(out: Path) -> None:
     doc_id = DOC_IDS["html"]
     line = mutate(out, doc_id, "00:00:01.000 --> 00:00:03.500", "00:00:01,000 --> 00:00:03.500")
-    v6 = check(validate(out, doc_id), "V6")
+    v6 = check(validate(out, doc_id), "Validation6")
     assert v6.status == "fail"
     assert any(
         "cue timing line does not match" in f.message and f.md_line == line for f in v6.findings
@@ -83,7 +83,7 @@ def test_broken_webvtt_timing_fails_v6(out: Path) -> None:
 def test_pdf_code_checked_for_syntax_only(out: Path) -> None:
     """No code blocks in PDF text: XML and WebVTT syntax only. Docling loses
     line breaks in code (known limitation), so the WebVTT example fails."""
-    v6 = check(validate(out, DOC_IDS["pdf"]), "V6")
+    v6 = check(validate(out, DOC_IDS["pdf"]), "Validation6")
     assert v6.details["compared"] == 0
     assert v6.status == "fail"
     assert all("WebVTT" in f.message or "cue timing" in f.message for f in v6.findings)

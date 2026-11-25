@@ -36,7 +36,7 @@ def test_document_metadata(client, doc) -> None:
     assert data["doc_id"] == "spec-a" and data["source_name"] == "Spec A.pdf"
     assert data["front_matter"]["id"] == "spec-a" and data["front_matter"]["validated"] is None
     assert data["validation"]["overall"] == "pass"
-    assert data["validation"]["checks"] == {"V1": "pass", "V7": "pass"}
+    assert data["validation"]["checks"] == {"Validation1": "pass", "Validation7": "pass"}
 
 
 def test_raw_markdown_source_and_report(client, doc) -> None:

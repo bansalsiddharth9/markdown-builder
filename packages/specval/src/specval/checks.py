@@ -124,7 +124,7 @@ def check_v1(doc: Document, cfg: SpecvalConfig) -> CheckResult:
     reference or readable Markdown.
     """
     ref, md = doc.reference, doc.md
-    result = CheckResult("V1", "Structure counts", PASS, "")
+    result = CheckResult("Validation1", "Structure counts", PASS, "")
     if ref is None or md is None:
         result.status, result.summary = NOT_APPLICABLE, "no source reference available"
         return result
@@ -225,7 +225,7 @@ def check_v2(doc: Document, cfg: SpecvalConfig) -> CheckResult:
     heading is numbered.
     """
     md = doc.md
-    result = CheckResult("V2", "Section numbering", PASS, "")
+    result = CheckResult("Validation2", "Section numbering", PASS, "")
     if md is None:
         result.status, result.summary = NOT_APPLICABLE, "Markdown not readable"
         return result
@@ -327,7 +327,7 @@ def check_v4(doc: Document, cfg: SpecvalConfig) -> CheckResult:
     readable Markdown.
     """
     ref, md = doc.reference, doc.md
-    result = CheckResult("V4", "Exact values", PASS, "")
+    result = CheckResult("Validation4", "Exact values", PASS, "")
     if ref is None or md is None:
         result.status, result.summary = NOT_APPLICABLE, "no source reference available"
         return result
@@ -446,7 +446,7 @@ def check_v7(doc: Document, cfg: SpecvalConfig) -> CheckResult:
     web, a heading level jump, any lint issue (deviations V-n). Unreadable
     Markdown fails.
     """
-    result = CheckResult("V7", "Markdown hygiene", PASS, "")
+    result = CheckResult("Validation7", "Markdown hygiene", PASS, "")
     findings: list[Finding] = []
     md = doc.md
 

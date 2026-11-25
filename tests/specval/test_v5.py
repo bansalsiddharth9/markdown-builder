@@ -60,7 +60,7 @@ def test_pandoc_empty_header_row_ignored() -> None:
 
 def test_unmodified_html_and_docx_tables_match(out: Path) -> None:
     for kind in ("html", "docx"):
-        v5 = check(validate(out, DOC_IDS[kind]), "V5")
+        v5 = check(validate(out, DOC_IDS[kind]), "Validation5")
         assert v5.status == "pass", (kind, [f.message for f in v5.findings])
         assert v5.details["tables_compared"] == 2
 
@@ -73,7 +73,7 @@ def test_swapped_cells_fail_v5(out: Path) -> None:
         row = re.search(r"^\| Rows +\| 15 rows +\|$", text, re.M)
         assert row is not None
         path.write_text(text.replace(row.group(0), "| 15 rows | Rows |"), encoding="utf-8")
-        v5 = check(validate(out, doc_id), "V5")
+        v5 = check(validate(out, doc_id), "Validation5")
         assert v5.status == "fail"
         messages = [f.message for f in v5.findings]
         assert "table 2, row 2, column 1: source 'Rows', Markdown '15 rows'" in messages, messages
@@ -86,7 +86,7 @@ def test_removed_row_fails_v5(out: Path) -> None:
     number = next(i for i, line in enumerate(lines) if line.startswith("| Margin"))
     del lines[number]
     path.write_text("\n".join(lines), encoding="utf-8")
-    v5 = check(validate(out, doc_id), "V5")
+    v5 = check(validate(out, doc_id), "Validation5")
     assert v5.status == "fail"
     assert any("table 2, row 4: missing row 'Margin | 10%'" in f.message for f in v5.findings)
 
@@ -94,7 +94,7 @@ def test_removed_row_fails_v5(out: Path) -> None:
 def test_changed_merged_cell_table_fails_v5_with_line(out: Path) -> None:
     doc_id = DOC_IDS["html"]
     line = mutate(out, doc_id, "<td>EDM</td>", "<td>EDN</td>")
-    v5 = check(validate(out, doc_id), "V5")
+    v5 = check(validate(out, doc_id), "Validation5")
     finding = next(f for f in v5.findings if "'EDM'" in f.message)
     assert finding.message == "table 1, row 5, column 3: source 'EDM', Markdown 'EDN'"
     assert finding.md_line == line
@@ -102,7 +102,7 @@ def test_changed_merged_cell_table_fails_v5_with_line(out: Path) -> None:
 
 def test_pdf_tables_compared_with_pdfplumber(out: Path) -> None:
     doc_id = DOC_IDS["pdf"]
-    v5 = check(validate(out, doc_id), "V5")
+    v5 = check(validate(out, doc_id), "Validation5")
     assert v5.status in ("pass", "warn"), [f.message for f in v5.findings]
     assert v5.details["tables_compared"] >= 1
 
@@ -110,7 +110,7 @@ def test_pdf_tables_compared_with_pdfplumber(out: Path) -> None:
 def test_pdf_cell_not_in_source_text_fails_v5(out: Path) -> None:
     doc_id = DOC_IDS["pdf"]
     mutate(out, doc_id, "32 columns", "33 columns")
-    v5 = check(validate(out, doc_id), "V5")
+    v5 = check(validate(out, doc_id), "Validation5")
     assert any("'33 columns'" in f.message for f in v5.findings)
     assert v5.status in ("warn", "fail")
 

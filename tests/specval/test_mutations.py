@@ -79,20 +79,20 @@ def test_unmodified_pdf_fails_only_on_lost_code_line_breaks(out: Path) -> None:
     example's timing lines carry the cue text. Everything else passes."""
     report = validate(out, DOC_IDS["pdf"])
     statuses = {c.id: c.status for c in report.checks}
-    assert statuses.pop("V6") == "fail", summary(report)
+    assert statuses.pop("Validation6") == "fail", summary(report)
     assert set(statuses.values()) <= {"pass", "not_applicable"}, summary(report)
 
 
 def test_saved_page_reports_its_missing_image(out: Path) -> None:
     """The saved-page fixture has a deliberately missing image (decision I2)."""
     report = validate(out, DOC_IDS["saved"])
-    v7 = check(report, "V7")
+    v7 = check(report, "Validation7")
     assert v7.status == "fail"
     assert [f.message for f in v7.findings if f.severity == "fail"] == [
         "image file missing: ./Sample%20Saved%20Spec_files/missing.png"
     ]
     assert any("not stored locally: https://www.w3.org/logo.png" in f.message for f in v7.findings)
-    assert {c.id: c.status for c in report.checks}["V1"] == "pass"
+    assert {c.id: c.status for c in report.checks}["Validation1"] == "pass"
 
 
 # ----------------------------------------------------------------- V4
@@ -102,7 +102,7 @@ def test_saved_page_reports_its_missing_image(out: Path) -> None:
 def test_changed_hex_value_fails_v4(out: Path, kind: str) -> None:
     doc_id = DOC_IDS[kind]
     line = mutate(out, doc_id, "0x14", "0x1A")
-    v4 = check(validate(out, doc_id), "V4")
+    v4 = check(validate(out, doc_id), "Validation4")
     assert v4.status == "fail"
     lost = next(f for f in v4.findings if "'0x14'" in f.message)
     added = next(f for f in v4.findings if "'0x1A'" in f.message)
@@ -114,7 +114,7 @@ def test_changed_hex_value_fails_v4(out: Path, kind: str) -> None:
 def test_shall_changed_to_should_fails_v4(out: Path, kind: str) -> None:
     doc_id = DOC_IDS[kind]
     line = mutate(out, doc_id, "A decoder shall support", "A decoder should support")
-    v4 = check(validate(out, doc_id), "V4")
+    v4 = check(validate(out, doc_id), "Validation4")
     assert v4.status == "fail"
     assert any(f.message.startswith("normative keywords: ") for f in v4.findings)
     assert any("'should'" in f.message and f.md_line == line for f in v4.findings)
@@ -126,7 +126,7 @@ def test_shall_changed_to_should_fails_v4(out: Path, kind: str) -> None:
 def test_zero_replaced_by_letter_o_in_hex_fails_v4(out: Path, kind: str) -> None:
     doc_id = DOC_IDS[kind]
     mutate(out, doc_id, "0x14", "Ox14")
-    v4 = check(validate(out, doc_id), "V4")
+    v4 = check(validate(out, doc_id), "Validation4")
     assert v4.status == "fail"
     assert any("hex '0x14': source 1, Markdown 0" in f.message for f in v4.findings)
 
@@ -135,7 +135,7 @@ def test_changed_timecode_and_unit_fail_v4(out: Path) -> None:
     doc_id = DOC_IDS["html"]
     mutate(out, doc_id, "01:00:00;02", "01:00:00;20")
     mutate(out, doc_id, "29.97 fps", "29.97 fpx")
-    v4 = check(validate(out, doc_id), "V4")
+    v4 = check(validate(out, doc_id), "Validation4")
     messages = "\n".join(f.message for f in v4.findings)
     assert "timecodes '01:00:00;02'" in messages and "numbers with units '29.97 fps'" in messages
 
@@ -143,7 +143,7 @@ def test_changed_timecode_and_unit_fail_v4(out: Path) -> None:
 def test_changed_byte_pair_in_table_fails_v4(out: Path) -> None:
     doc_id = DOC_IDS["html"]
     mutate(out, doc_id, "9420", "9421")  # in a paragraph: not a table family token
-    assert check(validate(out, doc_id), "V4").status == "pass"
+    assert check(validate(out, doc_id), "Validation4").status == "pass"
 
 
 # ----------------------------------------------------------------- V2
@@ -154,7 +154,7 @@ def test_removed_section_heading_fails_v2(out: Path, kind: str) -> None:
     doc_id = DOC_IDS[kind]
     delete_lines(out, doc_id, r"^#+ .*5\.1 Roll-up captions")
     report = validate(out, doc_id)
-    v2 = check(report, "V2")
+    v2 = check(report, "Validation2")
     assert v2.status == "fail"
     lines = md_path(out, doc_id).read_text(encoding="utf-8").split("\n")
     next_heading = next(i + 1 for i, line in enumerate(lines) if "5.1.1 Base row" in line)
@@ -164,7 +164,7 @@ def test_removed_section_heading_fails_v2(out: Path, kind: str) -> None:
     )
     if kind != "pdf":  # the source has headings to compare with
         assert any("not in the Markdown: '5.1'" in f.message and f.source_loc for f in v2.findings)
-        assert check(report, "V1").status == "fail"  # one heading fewer
+        assert check(report, "Validation1").status == "fail"  # one heading fewer
 
 
 def test_numbering_irregular_in_source_is_only_a_warning(out: Path) -> None:
@@ -178,7 +178,7 @@ def test_numbering_irregular_in_source_is_only_a_warning(out: Path) -> None:
         encoding="utf-8",
     )
     mutate(out, doc_id, "5.1 Roll-up captions", "5.3 Roll-up captions")
-    v2 = check(validate(out, doc_id), "V2")
+    v2 = check(validate(out, doc_id), "Validation2")
     assert v2.status == "warn"
     assert all(f.severity == "warn" for f in v2.findings)
     assert any("the source numbers it the same way" in f.message for f in v2.findings)
@@ -195,7 +195,7 @@ def test_deleted_code_block_fails_v1(out: Path, kind: str) -> None:
     block = re.search(r"\n```[a-z]*\nWEBVTT\n.*?\n```\n", text, re.S)
     assert block is not None
     path.write_text(text.replace(block.group(0), "\n"), encoding="utf-8")
-    v1 = check(validate(out, doc_id), "V1")
+    v1 = check(validate(out, doc_id), "Validation1")
     assert v1.status == "fail"
     assert any(f.message == "code blocks: source 2, Markdown 1" for f in v1.findings)
     assert any(
@@ -214,7 +214,7 @@ def test_deleted_table_fails_v1(out: Path, kind: str) -> None:
     ]
     assert len(kept) == len(lines) - 5
     path.write_text("\n".join(kept), encoding="utf-8")
-    v1 = check(validate(out, doc_id), "V1")
+    v1 = check(validate(out, doc_id), "Validation1")
     assert v1.status == "fail" and any(
         f.message == "tables: source 2, Markdown 1" for f in v1.findings
     )
@@ -228,7 +228,7 @@ def test_pdf_table_count_within_tolerance_warns(out: Path) -> None:
         line for line in lines if not re.match(r"^\|(-| (Property|Rows|Columns|Margin) )", line)
     ]
     path.write_text("\n".join(kept), encoding="utf-8")
-    v1 = check(validate(out, doc_id), "V1")
+    v1 = check(validate(out, doc_id), "Validation1")
     assert v1.status == "warn" and "pdfplumber finds 2, Markdown has 1" in v1.findings[0].message
 
 
@@ -242,7 +242,7 @@ def test_image_link_to_missing_file_fails_v7(out: Path, kind: str) -> None:
     image = re.search(r"\]\((media/[^)]+)\)|<img src=\"(media/[^\"]+)\"", text)
     assert image is not None
     line = mutate(out, doc_id, image.group(1) or image.group(2), "media/nope.png")
-    v7 = check(validate(out, doc_id), "V7")
+    v7 = check(validate(out, doc_id), "Validation7")
     assert v7.status == "fail"
     assert any(
         f.message == "image file missing: media/nope.png" and f.md_line == line for f in v7.findings
@@ -254,7 +254,7 @@ def test_broken_anchor_fails_v7_and_existing_anchors_pass(out: Path) -> None:
     line = mutate(
         out, doc_id, "The base row is", "See [5.1](#sec-5-1) and [x](#nowhere). The base row is"
     )
-    v7 = check(validate(out, doc_id), "V7")
+    v7 = check(validate(out, doc_id), "Validation7")
     assert v7.status == "fail"
     assert [f.message for f in v7.findings if f.severity == "fail"] == [
         "link to #nowhere: no such anchor in the document"
@@ -270,7 +270,7 @@ def test_unrewritten_self_link_warns(out: Path) -> None:
         "](#sec-intro)",
         "](https://www.w3.org/TR/2099/REC-sample-20990101/#sec-intro)",
     )
-    v7 = check(validate(out, doc_id), "V7")
+    v7 = check(validate(out, doc_id), "Validation7")
     assert any("own URL not rewritten" in f.message and f.severity == "warn" for f in v7.findings)
 
 
@@ -280,11 +280,11 @@ def test_front_matter_problems_fail_v7(out: Path) -> None:
     path = md_path(out, doc_id)
     text = path.read_text(encoding="utf-8")
     path.write_text(text.replace(f"id: {doc_id}\n", "id: other\n", 1), encoding="utf-8")
-    v7 = check(validate(out, doc_id), "V7")
+    v7 = check(validate(out, doc_id), "Validation7")
     assert any(f.message == f"front matter id 'other' is not '{doc_id}'" for f in v7.findings)
 
     path.write_text(text.replace("source_type: html", "source_type: pptx", 1), encoding="utf-8")
-    v7 = check(validate(out, doc_id), "V7")
+    v7 = check(validate(out, doc_id), "Validation7")
     assert any(f.message.startswith("front matter invalid:") for f in v7.findings)
 
 
@@ -292,7 +292,7 @@ def test_changed_source_file_fails_v7(out: Path) -> None:
     doc_id = DOC_IDS["docx"]
     source = out / doc_id / "source.docx"
     source.write_bytes(source.read_bytes() + b"\0")
-    v7 = check(validate(out, doc_id), "V7")
+    v7 = check(validate(out, doc_id), "Validation7")
     assert any(
         "source_sha256 in the front matter does not match source.docx" in f.message
         for f in v7.findings

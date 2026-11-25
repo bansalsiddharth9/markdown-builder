@@ -51,7 +51,7 @@ def check(report: dict, check_id: str) -> dict:
 
 def test_doc_validated_with_both_readings(out: Path) -> None:
     report = validate(out)
-    v1, v3 = check(report, "V1"), check(report, "V3")
+    v1, v3 = check(report, "Validation1"), check(report, "Validation3")
     assert v1["status"] != "n/a"  # headings and tables from LibreOffice's .docx
     assert v3["details"]["text_from"] == "catdoc"
     assert v3["status"] == "pass", v3
@@ -70,7 +70,7 @@ def test_text_lost_by_libreoffice_still_caught(out: Path) -> None:
     lo.save(str(folder / "libreoffice.docx"))
     md = folder / "sample-spec.md"
     md.write_text(md.read_text(encoding="utf-8").replace(LOST, ""), encoding="utf-8")
-    v3 = check(validate(out), "V3")
+    v3 = check(validate(out), "Validation3")
     assert any(f.get("excerpt") == LOST for f in v3["findings"]), v3
 
 
@@ -79,5 +79,5 @@ def test_without_catdoc_text_from_docx_with_note(
 ) -> None:
     monkeypatch.setattr(reference, "find_catdoc", lambda: None)
     report = validate(out)
-    assert check(report, "V3")["details"]["text_from"] == "libreoffice.docx"
+    assert check(report, "Validation3")["details"]["text_from"] == "libreoffice.docx"
     assert any("catdoc not found" in note for note in report["notes"])

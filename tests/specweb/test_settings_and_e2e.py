@@ -75,7 +75,7 @@ def test_real_job_end_to_end(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fi
         (tmp_path / "data/jobs" / job["id"] / "validation/sample-spec.json").read_text()
     )
     failing = {c["id"] for c in report["checks"] if c["status"] == "fail"}
-    assert failing == {"V7"}
+    assert failing == {"Validation7"}
     folder = tmp_path / "data/jobs" / job["id"]
     assert (folder / "output/sample-spec/sample-spec.md").is_file()
     assert (folder / "output/sample-spec/sections/index.md").is_file()

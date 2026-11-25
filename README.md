@@ -115,7 +115,7 @@ Edit `title`, `spec_version` and `manual_fixes` in the front matter freely: they
 - `config/specconv.yaml`: PDF text-layer thresholds, HTML tags to strip, fetch timeout and retries, `self_urls` for saved pages without a "saved from" comment.
 - `config/sources.yaml`: web pages (`id`, `url`, `render: static|browser`, `clean: none|main-content`).
 - `config/specval.yaml`: coverage thresholds, PDF table tolerance, always-reviewed table words, sample size and seed, extra token patterns.
-- `config/acceptance.yaml`: questions with an expected snippet per document (check V9); quote every `expect` value.
+- `config/acceptance.yaml`: questions with an expected snippet per document (check Validation9); quote every `expect` value.
 
 Unknown keys are errors, so a typo never goes unnoticed.
 

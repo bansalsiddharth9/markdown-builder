@@ -75,7 +75,7 @@ def test_coverage_present_near_missing() -> None:
 
 def test_unmodified_conversions_have_full_coverage(out: Path) -> None:
     for kind in ("html", "docx", "pdf"):
-        v3 = check(validate(out, DOC_IDS[kind]), "V3")
+        v3 = check(validate(out, DOC_IDS[kind]), "Validation3")
         assert v3.status == "pass", (kind, [f.message for f in v3.findings])
         assert v3.details["coverage"] == 1.0
 
@@ -83,7 +83,7 @@ def test_unmodified_conversions_have_full_coverage(out: Path) -> None:
 def test_deleted_paragraph_fails_v3_and_names_it(out: Path) -> None:
     doc_id = DOC_IDS["html"]
     delete_lines(out, doc_id, r"^The base row is the lowest row")
-    v3 = check(validate(out, doc_id), "V3")
+    v3 = check(validate(out, doc_id), "Validation3")
     assert v3.status == "fail"
     missing = [f for f in v3.findings if f.message.startswith("missing")]
     assert len(missing) == 1
@@ -96,7 +96,7 @@ def test_pdf_deleted_paragraph_names_page(out: Path) -> None:
     text = md_path(out, doc_id).read_text(encoding="utf-8")
     assert "The base row is the lowest row" in text
     delete_lines(out, doc_id, r"The base row is the lowest row")
-    v3 = check(validate(out, doc_id), "V3")
+    v3 = check(validate(out, doc_id), "Validation3")
     assert any(f.source_loc and f.source_loc.startswith("page ") for f in v3.findings)
 
 

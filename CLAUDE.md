@@ -10,7 +10,7 @@ reference library, and checks each result against its source so a person knows w
 | Package | Role |
 | --- | --- |
 | `packages/specconv` | Converter CLI. PDFs go through Docling, everything else through Pandoc. |
-| `packages/specval` | Validator CLI. Nine checks (V1–V9), a review queue, approval. |
+| `packages/specval` | Validator CLI. Nine checks (Validation1–Validation9; the design and `deviations.md` call them V1–V9), a review queue, approval. |
 | `packages/specweb` | Web UI (FastAPI, Jinja2, HTMX, SQLite, Huey) on top of the two CLIs. |
 | `packages/common` | Formats both tools share: `manifest.json` and Markdown front matter. |
 
@@ -105,7 +105,7 @@ uv run specweb worker --config deploy/specweb.yaml
   The specweb tests use a fake runner instead of Docling and Pandoc.
 - **`.doc` files go through LibreOffice** (`converters/libreoffice.py`, DOC1): it saves a
   `.docx` that Pandoc converts. The validator takes headings and tables from that `.docx`,
-  but V3's text from **catdoc** reading the original `.doc`, to stay independent. LibreOffice
+  but Validation3's text from **catdoc** reading the original `.doc`, to stay independent. LibreOffice
   garbles a table that ends a document when it *writes* `.doc`, so test fixtures add a final
   paragraph first.
 - **Ids mirror the input folders** (NL1): `input/SCC/x.pdf` → id `SCC/x` →

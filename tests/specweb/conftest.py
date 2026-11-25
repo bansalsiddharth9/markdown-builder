@@ -129,14 +129,14 @@ class FakeRunner:
                     "markdown_sha256": "",
                     "markdown_body_sha256": body_sha256(text),
                     "checks": [
-                        {"id": "V1", "name": "Structure counts", "status": "pass",
+                        {"id": "Validation1", "name": "Structure counts", "status": "pass",
                          "summary": "counts match", "findings": [], "details": {}},
-                        {"id": "V7", "name": "Markdown hygiene",
+                        {"id": "Validation7", "name": "Markdown hygiene",
                          "status": "fail" if fail else "pass", "summary": "",
                          "findings": [finding] if fail else [], "details": {}},
                     ],
                     "review_queue": (
-                        [{"kind": "fail", "check": "V7", "text": finding["message"],
+                        [{"kind": "fail", "check": "Validation7", "text": finding["message"],
                           "md_line": 9, "source_loc": "page 2", "excerpt": None}] if fail else []
                     ) + [{"kind": "sample", "check": None, "text": "page 1: compare",
                           "md_line": None, "source_loc": "page 1", "excerpt": None}],

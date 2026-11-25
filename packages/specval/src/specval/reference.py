@@ -647,7 +647,7 @@ def from_pdf(path: Path) -> Reference:
     if ref.unreadable:
         ref.notes.append(
             f"{sum(p.lines_left_out for p in ref.unreadable)} line(s) with characters in a "
-            "font without a Unicode map left out of V3's text"
+            "font without a Unicode map left out of Validation3's text"
         )
     return ref
 
@@ -682,7 +682,7 @@ def from_doc(path: Path, docx_path: Path) -> Reference:
     catdoc = find_catdoc()
     if catdoc is None:
         ref.notes.append(
-            "catdoc not found: V3 compares the text with LibreOffice's .docx, not an "
+            "catdoc not found: Validation3 compares the text with LibreOffice's .docx, not an "
             "independent reading of the .doc (install catdoc)"
         )
         return ref
@@ -695,7 +695,7 @@ def from_doc(path: Path, docx_path: Path) -> Reference:
     )
     if proc.returncode != 0:
         ref.notes.append(
-            f"catdoc failed (exit {proc.returncode}): V3 compares the text with "
+            f"catdoc failed (exit {proc.returncode}): Validation3 compares the text with "
             "LibreOffice's .docx instead"
         )
         return ref

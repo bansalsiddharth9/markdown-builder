@@ -50,7 +50,7 @@ def check_v3(doc: Document, cfg: SpecvalConfig) -> CheckResult:
     without a source reference or readable Markdown.
     """
     ref, md = doc.reference, doc.md
-    result = CheckResult("V3", "Text completeness", PASS, "")
+    result = CheckResult("Validation3", "Text completeness", PASS, "")
     if ref is None or md is None:
         result.status, result.summary = NOT_APPLICABLE, "no source reference available"
         return result
@@ -164,7 +164,7 @@ def check_v5(doc: Document, cfg: SpecvalConfig) -> CheckResult:
     Markdown, or any table.
     """
     ref, md = doc.reference, doc.md
-    result = CheckResult("V5", "Table content", PASS, "")
+    result = CheckResult("Validation5", "Table content", PASS, "")
     if ref is None or md is None:
         result.status, result.summary = NOT_APPLICABLE, "no source reference available"
         return result
@@ -218,7 +218,7 @@ def check_v5(doc: Document, cfg: SpecvalConfig) -> CheckResult:
         f"{len(pairs)} table(s) compared cell by cell, all match"
         if not findings
         else f"{differing} of {len(pairs)} table(s) differ"
-    ) + (f"; {unpaired} source table(s) not paired (see V1)" if unpaired else "")
+    ) + (f"; {unpaired} source table(s) not paired (see Validation1)" if unpaired else "")
     return result
 
 
@@ -370,7 +370,7 @@ def check_v6(doc: Document, cfg: SpecvalConfig) -> CheckResult:
     there are no code blocks.
     """
     ref, md = doc.reference, doc.md
-    result = CheckResult("V6", "Code blocks", PASS, "")
+    result = CheckResult("Validation6", "Code blocks", PASS, "")
     if md is None:
         result.status, result.summary = NOT_APPLICABLE, "Markdown not readable"
         return result
@@ -465,7 +465,7 @@ def check_v8(doc: Document, cfg: SpecvalConfig) -> CheckResult:
     Not applicable when the Markdown is unreadable.
     """
     md = doc.md
-    result = CheckResult("V8", "Character confusion", PASS, "")
+    result = CheckResult("Validation8", "Character confusion", PASS, "")
     if md is None:
         result.status, result.summary = NOT_APPLICABLE, "Markdown not readable"
         return result
@@ -517,7 +517,7 @@ def check_v9(doc: Document, cfg: SpecvalConfig) -> CheckResult:
     NFKC, whitespace collapsed; case matters), otherwise fail. Not applicable
     when no question names this document; unreadable Markdown fails.
     """
-    result = CheckResult("V9", "Acceptance questions", PASS, "")
+    result = CheckResult("Validation9", "Acceptance questions", PASS, "")
     questions = [q for q in doc.questions if q.doc == doc.id]
     if not questions:
         result.status, result.summary = NOT_APPLICABLE, "no acceptance questions for this document"

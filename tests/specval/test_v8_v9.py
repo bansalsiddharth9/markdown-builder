@@ -20,13 +20,13 @@ def test_confusable_tokens() -> None:
 
 def test_unmodified_conversions_have_no_confusions(out: Path) -> None:
     for kind in ("html", "docx", "pdf"):
-        assert check(validate(out, DOC_IDS[kind]), "V8").status == "pass"
+        assert check(validate(out, DOC_IDS[kind]), "Validation8").status == "pass"
 
 
 def test_letter_o_in_hex_in_text_warns_v8(out: Path) -> None:
     doc_id = DOC_IDS["html"]
     line = mutate(out, doc_id, "0x14", "Ox14")
-    v8 = check(validate(out, doc_id), "V8")
+    v8 = check(validate(out, doc_id), "Validation8")
     assert v8.status == "warn"
     assert [(f.message, f.md_line) for f in v8.findings] == [
         ("'Ox14' looks like a number or hex value with a letter in it (O, o, l, I, S)", line)
@@ -36,7 +36,7 @@ def test_letter_o_in_hex_in_text_warns_v8(out: Path) -> None:
 def test_letter_l_in_table_fails_v8(out: Path) -> None:
     doc_id = DOC_IDS["html"]
     line = mutate(out, doc_id, "<td>14</td>", "<td>l4</td>")
-    v8 = check(validate(out, doc_id), "V8")
+    v8 = check(validate(out, doc_id), "Validation8")
     assert v8.status == "fail"
     assert v8.findings[0].md_line == line and v8.findings[0].severity == "fail"
 
@@ -48,7 +48,7 @@ def test_token_also_in_source_is_not_reported(out: Path) -> None:
         source.read_text(encoding="utf-8").replace("0x14", "Ox14", 1), encoding="utf-8"
     )
     mutate(out, doc_id, "0x14", "Ox14")
-    assert check(validate(out, doc_id), "V8").status == "pass"
+    assert check(validate(out, doc_id), "Validation8").status == "pass"
 
 
 def validate_with(out: Path, doc_id: str, questions: list[AcceptanceQuestion]):
@@ -57,7 +57,7 @@ def validate_with(out: Path, doc_id: str, questions: list[AcceptanceQuestion]):
 
 
 def test_v9_not_applicable_without_questions(out: Path) -> None:
-    assert check(validate(out, DOC_IDS["html"]), "V9").status == "not_applicable"
+    assert check(validate(out, DOC_IDS["html"]), "Validation9").status == "not_applicable"
 
 
 def test_v9_expected_snippets(out: Path) -> None:
@@ -67,11 +67,11 @@ def test_v9_expected_snippets(out: Path) -> None:
         AcceptanceQuestion(doc_id, "Region position attribute?", "tts:origin"),
         AcceptanceQuestion("other-doc", "Not this document", "anything"),
     ]
-    v9 = check(validate_with(out, doc_id, questions), "V9")
+    v9 = check(validate_with(out, doc_id, questions), "Validation9")
     assert v9.status == "pass" and v9.details == {"questions": 2, "answered": 2}
 
     questions.append(AcceptanceQuestion(doc_id, "Frame rate?", "25 fps"))
-    v9 = check(validate_with(out, doc_id, questions), "V9")
+    v9 = check(validate_with(out, doc_id, questions), "Validation9")
     assert v9.status == "fail"
     assert [f.message for f in v9.findings] == [
         "acceptance question 'Frame rate?': expected '25 fps' not found"
