@@ -60,8 +60,7 @@ uv run specweb serve  --config deploy/specweb.yaml --host 0.0.0.0 --port 8000
 uv run specweb worker --config deploy/specweb.yaml
 ```
 
-- Expected test result: everything passes except **1 xfail**
-  (`test_code_block_line_breaks_kept`, a known Docling limitation).
+- Expected test result: everything passes (no xfail since Q24 rebuilt code line breaks).
 - Browser tests and `render: browser` need `PLAYWRIGHT_BROWSERS_PATH=.playwright`. The browsers
   are installed there, not in `~/.cache`.
 

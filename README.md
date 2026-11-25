@@ -150,7 +150,9 @@ Protections (settings in `specweb.yaml`): at most 20 files of 100 MB per job, fi
 
 ## What to expect from PDFs
 
-PDFs are converted with Docling, which is good but not perfect. Known limitations (details in `spec/deviations.md`): line breaks inside code are lost, headings all come out at the same level, text inside diagrams stays in the image, and a code line at a page break can be taken for a page footer (everything dropped as header or footer is listed in `conversion.json`). The validator is built to catch these, so a PDF report usually has items to review. PDFs without a text layer are reported as `no_text_layer` and not converted (no OCR).
+PDFs are converted with Docling, which is good but not perfect. Known limitations (details in `spec/deviations.md`): headings all come out at the same level, a code example that runs over a page break is split into two code blocks, and a code line at a page break can be taken for a page footer (everything dropped as header or footer is listed in `conversion.json`). The validator is built to catch these, so a PDF report usually has items to review. PDFs without a text layer are reported as `no_text_layer` and not converted (no OCR).
+
+Docling joins the lines of a code example; the converter puts the line breaks and indentation back from the PDF. Text inside a drawing (labels, an XML example drawn as a figure) is written under its image as "Text in the figure", one line per text, without the drawing's layout.
 
 Some PDFs draw symbols with a font that has no Unicode map (EBU Tech 3264's code-page tables): the PDF holds each symbol's picture, not which character it is, so the text shows `�` or wrong letters. Such a table gets a note and a picture of it from the PDF directly underneath; use the picture as the reference. The validator lists those pages as "compare by eye" warnings instead of counting their lines as missing text.
 

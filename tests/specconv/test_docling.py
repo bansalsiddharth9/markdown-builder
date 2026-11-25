@@ -184,8 +184,8 @@ def test_page_furniture_listed_in_conversion_json(run, manifest) -> None:
     assert any("page headers or footers" in w for w in manifest.get("sample-spec").warnings)
 
 
-@pytest.mark.xfail(strict=True, reason="known Docling limitation: line breaks in code are lost")
 def test_code_block_line_breaks_kept(run, fixture_mod: dict) -> None:
+    """Docling joins code lines; the converter rebuilds them from the PDF (Q24)."""
     root, _ = run
     assert fixture_mod["TTML_EXAMPLE"] in body(root, "sample-spec")
 

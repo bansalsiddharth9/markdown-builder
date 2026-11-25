@@ -22,6 +22,11 @@
 - A table holding characters from a font without a Unicode map (the PDF
   stores their pictures, not which characters they are) gets a note and a
   picture of the table from the PDF page under it (glyphs.py, deviation Q23).
+- Code blocks get their line breaks and indentation back from the PDF
+  (pdfcode.py, deviation Q24); Docling joins the lines with spaces.
+- The text inside a picture (a drawing's labels) is written under the image
+  as "Text in the figure" (deviation Q25); Docling reads it but writes only
+  the image.
 - Text Docling classifies as page header or footer ("furniture") is left out
   of the Markdown, as Docling does; it is listed in conversion.json so a
   reviewer can see exactly what was dropped (a code line at the bottom of a
@@ -38,7 +43,7 @@ from importlib.metadata import version as dist_version
 from pathlib import Path
 from typing import Any
 
-from specconv.converters import glyphs
+from specconv.converters import glyphs, pdfcode
 from specconv.converters.base import MEDIA_DIR, ConversionError, ConversionResult
 from specconv.models import PINNED_MODELS, missing_models
 
@@ -132,9 +137,15 @@ def _span_aware_table_serializer(unmapped: dict[str, dict[str, Any]] | None = No
     return SpanAwareTableSerializer()
 
 
-def _formula_text_serializer() -> Any:
+def _formula_text_serializer(code_texts: dict[str, str] | None = None) -> Any:
     """Markdown text serializer that writes undecoded formulas as their original
-    text in a code block (inline: code span) instead of a placeholder comment."""
+    text in a code block (inline: code span) instead of a placeholder comment.
+
+    code_texts maps a code item's self_ref to its text with line breaks, rebuilt
+    from the PDF (pdfcode.code_texts, deviation Q24); such a code block is
+    written with that text instead of Docling's one-line version.
+    """
+    rebuilt = code_texts or {}
     # _code_block and _code_span are private Docling helpers; they choose a fence or
     # backtick run long enough for the text. Check them when upgrading Docling.
     from docling_core.transforms.serializer.common import create_ser_result
@@ -143,13 +154,18 @@ def _formula_text_serializer() -> Any:
         _code_block,
         _code_span,
     )
-    from docling_core.types.doc import FormulaItem
+    from docling_core.types.doc import CodeItem, FormulaItem
 
     class FormulaAsTextSerializer(MarkdownTextSerializer):
-        """Docling's text serializer, except for formulas it could not decode."""
+        """Docling's text serializer, except for formulas it could not decode
+        and code blocks whose lines were rebuilt."""
 
         def serialize(self, *, item, doc_serializer, doc, is_inline_scope=False, **kwargs):
-            """Write an undecoded formula (no text, but PDF text in orig) as code (Q18)."""
+            """Write an undecoded formula (no text, but PDF text in orig) as code (Q18),
+            and a code block with its rebuilt lines (Q24)."""
+            if isinstance(item, CodeItem) and item.self_ref in rebuilt:
+                # A copy with the rebuilt text, so Docling still writes the fence.
+                item = item.model_copy(update={"text": rebuilt[item.self_ref]})
             if isinstance(item, FormulaItem) and not item.text and item.orig:
                 if item.self_ref in doc_serializer.get_excluded_refs(**kwargs):
                     return create_ser_result()
@@ -164,6 +180,64 @@ def _formula_text_serializer() -> Any:
             )
 
     return FormulaAsTextSerializer()
+
+
+# A line start Markdown would read as a heading, list item or numbered item.
+_BLOCK_START = re.compile(r"^(#|[-+]|\d+[.)])(?=\s|$)")
+
+
+def _escape_line(text: str) -> str:
+    """text with Markdown characters escaped, also a start like "#", "-" or "1."."""
+    escaped = _MD_SPECIAL.sub(r"\\\1", text)
+    # A backslash before the start's last character: "\#", "\-", "1\.".
+    return _BLOCK_START.sub(lambda m: m.group(0)[:-1] + "\\" + m.group(0)[-1], escaped)
+
+
+def figure_texts(item: Any, doc: Any) -> list[str]:
+    """The texts Docling found inside a picture (its child items, nested ones
+    included), in reading order; its caption and footnotes are left out, as
+    Docling writes those itself."""
+    skip = {ref.cref for ref in [*item.captions, *item.footnotes]}
+    texts: list[str] = []
+
+    def walk(node: Any) -> None:
+        for child_ref in node.children:
+            child = child_ref.resolve(doc)
+            text = getattr(child, "text", "")
+            if child.self_ref not in skip and text and text.strip():
+                texts.append(" ".join(text.split()))
+            walk(child)
+
+    walk(item)
+    return texts
+
+
+def _picture_text_serializer() -> Any:
+    """Markdown picture serializer that writes, under the image, the text
+    Docling found inside the picture (deviation Q25): labels of a drawing, or an
+    XML example drawn as a figure, which would otherwise exist only as pixels.
+    One bullet per text, Markdown characters escaped, under "Text in the figure:"."""
+    from docling_core.transforms.serializer.common import create_ser_result
+    from docling_core.transforms.serializer.markdown import MarkdownPictureSerializer
+
+    class PictureWithTextSerializer(MarkdownPictureSerializer):
+        """Docling's picture serializer plus the picture's own text."""
+
+        def serialize(self, *, item, doc_serializer, doc, **kwargs):
+            """The image (and caption) as Docling writes them, then the text block."""
+            result = super().serialize(item=item, doc_serializer=doc_serializer, doc=doc, **kwargs)
+            if item.self_ref in doc_serializer.get_excluded_refs(**kwargs):
+                return result
+            texts = figure_texts(item, doc)
+            if not texts:
+                return result
+            block = "*Text in the figure:*\n\n" + "\n".join(
+                "- " + _escape_line(text) for text in texts
+            )
+            joined = f"{result.text}\n\n{block}" if result.text else block
+            return create_ser_result(text=joined, span_source=item)
+
+    return PictureWithTextSerializer()
 
 
 class _WarningCollector(logging.Handler):
@@ -238,6 +312,8 @@ class DoclingConverter:
             "undecoded_formulas": "original text as code",
             "document_index": "bullet list",
             "unmapped_glyph_tables": "picture added under the table",
+            "code_lines": "rebuilt from the PDF",
+            "picture_text": "written under the image",
             "models": {m.repo_id: m.revision for m in PINNED_MODELS},
         }
 
@@ -324,9 +400,12 @@ class DoclingConverter:
                 "some symbols are \ufffd or wrong letters; a picture of each table from "
                 "the PDF is added under it"
             )
+        # Code blocks get their line breaks back from the PDF (Q24).
+        rebuilt_code = pdfcode.code_texts(doc, src)
         serializer = MarkdownDocSerializer(
             doc=doc,
-            text_serializer=_formula_text_serializer(),
+            text_serializer=_formula_text_serializer(rebuilt_code),
+            picture_serializer=_picture_text_serializer(),
             table_serializer=_span_aware_table_serializer(unmapped),
             params=MarkdownParams(image_mode=ImageRefMode.REFERENCED),
         )
@@ -364,5 +443,10 @@ class DoclingConverter:
                 "pictures": len(doc.pictures),
                 "dropped_as_page_furniture": furniture,
                 "tables_with_unmapped_glyphs": list(unmapped.values()),
+                "code_blocks": sum(
+                    1 for t in doc.texts if getattr(t.label, "value", t.label) == "code"
+                ),
+                "code_lines_rebuilt": len(rebuilt_code),
+                "pictures_with_text": sum(1 for p in doc.pictures if figure_texts(p, doc)),
             },
         )

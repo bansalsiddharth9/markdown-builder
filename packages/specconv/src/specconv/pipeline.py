@@ -62,7 +62,8 @@ log = logging.getLogger("specconv.pipeline")
 
 # Bump when HTML preparation, filters or post-processing change. It is part of the
 # options hash, so every document is converted again on the next run (deviation Q9).
-RECIPE_VERSION = 10  # 10: pictures of tables with unmapped-font characters (Q23)
+# 10: unmapped-font table pictures (Q23); 11: code lines and figure text (Q24, Q25).
+RECIPE_VERSION = 11
 FAILED_STATUSES = frozenset({"failed", "no_text_layer"})
 # Only documents that converted fine can be skipped; failed ones are always retried.
 SKIPPABLE_STATUSES = frozenset({"ok", "skipped_unchanged"})
