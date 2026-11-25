@@ -414,55 +414,77 @@ def from_docx(path: Path) -> Reference:
 _DIGITS = re.compile(r"\d+")
 
 
+# Only a page's very first and last line can be a running title: with two,
+# DCDM's "Direction = ttb)" (a sentence's end) and ARIB B24's "circled number"
+# (a long table's cell) were taken for headers.
+EDGE_LINES = 1
+EDGE_MIN_PAGES = 3  # an edge line repeated on this many pages is a running title
+
+
+def _page_number_key(key: str, page: int) -> tuple[str, int] | None:
+    """The line with its last number replaced by "#", and that number minus the
+    page index: the same on every page for a page-number line ("Page 12")."""
+    numbers = _DIGITS.findall(key)
+    if not numbers:
+        return None
+    at = key.rfind(numbers[-1])
+    return key[:at] + "#" + key[at + len(numbers[-1]) :], int(numbers[-1]) - page
+
+
 def furniture_lines(pages: list[list[str]]) -> set[tuple[int, int]]:
-    """(page index, line index) of running headers, footers and page numbers
-    (deviations V-d): lines that appear unchanged on more than half the pages,
-    and lines with one number that follows the page number ("Page 12", "- 12 -",
-    "CEA-608-E 12") on more than half the pages."""
+    """(page index, line index) of running headers, footers and page numbers.
+
+    A line is one when (deviations V-d, V-af):
+    - it appears unchanged on more than half the pages, or on more than half
+      the odd pages or of the even pages (headers that alternate, as in EBU
+      Tech 3264: "tech 3264 EBU - …" on even, "EBU - … tech 3264" on odd pages);
+    - its one number follows the page number ("Page 12", "- 12 -") on more
+      than half the pages (or of the odd or even pages);
+    - it is the first or last non-empty line of a page and the same at an
+      edge of at least EDGE_MIN_PAGES pages (a running chapter title). A line
+      repeated in the middle of pages is content (a table's column names), so
+      only the edges count.
+    """
     # Too few pages to tell furniture from text (on one page, every line
     # would be "on more than half the pages").
     if len(pages) < 3:
         return set()
-    half = len(pages) / 2
+    groups = [set(range(len(pages)))]
+    for parity in (0, 1):  # page index 0 is page 1: odd pages, then even pages
+        group = set(range(parity, len(pages), 2))
+        if len(group) >= 3:
+            groups.append(group)
     exact: dict[str, set[int]] = {}
     numbered: dict[tuple[str, int], set[int]] = {}
+    at_edge: dict[str, set[int]] = {}
+    keys: list[list[str]] = []
     for p, lines in enumerate(pages):
-        for line in lines:
-            key = normalize(line)
+        page_keys = [normalize(line) for line in lines]
+        keys.append(page_keys)
+        filled = [i for i, key in enumerate(page_keys) if key]
+        edges = set(filled[:EDGE_LINES] + filled[-EDGE_LINES:])
+        for i, key in enumerate(page_keys):
             if not key:
                 continue
             exact.setdefault(key, set()).add(p)
-            numbers = _DIGITS.findall(key)
-            if numbers:
-                # The line with its last number replaced by "#". A page number
-                # minus the page index stays the same on every page, so lines
-                # with the same pattern and offset are a page-number line.
-                pattern = (
-                    key[: key.rfind(numbers[-1])]
-                    + "#"
-                    + key[key.rfind(numbers[-1]) + len(numbers[-1]) :]
-                )
-                numbered.setdefault((pattern, int(numbers[-1]) - p), set()).add(p)
-    repeated = {k for k, v in exact.items() if len(v) > half}
-    paged = {k for k, v in numbered.items() if len(v) > half}
+            number_key = _page_number_key(key, p)
+            if number_key:
+                numbered.setdefault(number_key, set()).add(p)
+            if i in edges:
+                at_edge.setdefault(key, set()).add(p)
+
+    def frequent(on_pages: set[int]) -> bool:
+        """On more than half the pages of the document, or of one parity group."""
+        return any(len(on_pages & group) > len(group) / 2 for group in groups)
+
+    repeated = {k for k, v in exact.items() if frequent(v)}
+    repeated |= {k for k, v in at_edge.items() if len(v) >= EDGE_MIN_PAGES}
+    paged = {k for k, v in numbered.items() if frequent(v)}
     found: set[tuple[int, int]] = set()
-    for p, lines in enumerate(pages):
-        for i, line in enumerate(lines):
-            key = normalize(line)
-            if not key:
-                continue
-            if key in repeated:
+    for p, page_keys in enumerate(keys):
+        for i, key in enumerate(page_keys):
+            if key and (key in repeated or _page_number_key(key, p) in paged):
                 found.add((p, i))
-                continue
-            numbers = _DIGITS.findall(key)
-            if numbers:
-                pattern = (
-                    key[: key.rfind(numbers[-1])]
-                    + "#"
-                    + key[key.rfind(numbers[-1]) + len(numbers[-1]) :]
-                )
-                if (pattern, int(numbers[-1]) - p) in paged:
-                    found.add((p, i))
     return found
 
 

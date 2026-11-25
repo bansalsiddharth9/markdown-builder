@@ -34,6 +34,31 @@ from specval.text import CODE, TABLE, Segment, normalize
 from specval.textcheck import coverage, join_pdf_hyphenation, normalize_for_v3
 
 MAX_MISSING_LISTED = 50  # V3 missing sentences and V8 hits listed (deviations V-u)
+MIN_DROPPED_MATCH = 8  # characters; shorter header texts ("2") would match anything
+
+
+def _squashed(text: str) -> str:
+    """V3's normalization without any whitespace, for matching dropped texts."""
+    return "".join(normalize_for_v3(text).split())
+
+
+def dropped_as_furniture(doc: Document) -> list[str]:
+    """The texts the converter says it left out as page headers or footers
+    (conversion.json, docling.dropped_as_page_furniture; deviation V-ag),
+    squashed for matching. Empty for documents without such a list."""
+    docling = (doc.conversion or {}).get("docling") or {}
+    texts = [str(item.get("text", "")) for item in docling.get("dropped_as_page_furniture") or []]
+    return [key for key in map(_squashed, texts) if len(key) >= MIN_DROPPED_MATCH]
+
+
+def _in_dropped(sentence: str, dropped: list[str]) -> bool:
+    """True when the sentence and a dropped text contain one another: pypdf
+    and Docling cut header lines differently."""
+    key = _squashed(sentence)
+    if len(key) < MIN_DROPPED_MATCH:
+        return False
+    return any(key in item or item in key for item in dropped)
+
 
 # --------------------------------------------------------------------- V3
 
@@ -44,7 +69,9 @@ def check_v3(doc: Document, cfg: SpecvalConfig) -> CheckResult:
     Fail when coverage is below text_coverage.fail_below (default 98%), warn
     below warn_below (default 99.5%), else pass. Missing sentences (up to 50)
     are listed with that severity, or as info when the check passes
-    (deviations V-u). A PDF page with characters in a font without a Unicode
+    (deviations V-u). A sentence the converter left out as a page header or
+    footer (conversion.json) is a warning to confirm, not missing (V-ag). A PDF
+    page with characters in a font without a Unicode
     map adds a warning to check it by eye; its lines with them are not
     counted (V-ac). Code is left out (V6 compares it). Not applicable
     without a source reference or readable Markdown.
@@ -71,9 +98,16 @@ def check_v3(doc: Document, cfg: SpecvalConfig) -> CheckResult:
     )
     tc = cfg.text_coverage
     cov = coverage(source, markdown, tc, by_line=pdf)  # by_line: deviations V-t
-    if cov.ratio < tc.fail_below:
+    # V-ag: sentences the converter reports having dropped as page headers or
+    # footers are not counted as missing; each is listed as a warning to
+    # confirm (Docling can take a real line at a page break for a footer).
+    dropped = dropped_as_furniture(doc) if pdf else []
+    confirm = [(s, loc) for s, loc in cov.missing if _in_dropped(s, dropped)]
+    missing = [(s, loc) for s, loc in cov.missing if not _in_dropped(s, dropped)]
+    ratio = (cov.total - len(missing)) / cov.total if cov.total else 1.0
+    if ratio < tc.fail_below:
         result.status = FAIL
-    elif cov.ratio < tc.warn_below:
+    elif ratio < tc.warn_below or confirm:
         result.status = WARN
     severity = result.status if result.status != PASS else INFO
     # Pages whose lines with font-without-Unicode characters were left out of
@@ -91,22 +125,37 @@ def check_v3(doc: Document, cfg: SpecvalConfig) -> CheckResult:
         )
     if ref.unreadable and result.status == PASS:
         result.status = WARN
-    for sentence, loc in cov.missing[:MAX_MISSING_LISTED]:
+    for sentence, loc in missing[:MAX_MISSING_LISTED]:
         result.findings.append(
             Finding(severity, "missing sentence", source_loc=loc, excerpt=sentence)
         )
-    if len(cov.missing) > MAX_MISSING_LISTED:
+    if len(missing) > MAX_MISSING_LISTED:
+        result.findings.append(
+            Finding(severity, f"… and {len(missing) - MAX_MISSING_LISTED} more missing sentence(s)")
+        )
+    for sentence, loc in confirm[:MAX_MISSING_LISTED]:
         result.findings.append(
             Finding(
-                severity, f"… and {len(cov.missing) - MAX_MISSING_LISTED} more missing sentence(s)"
+                WARN,
+                "not in the Markdown: the converter left it out as a page header or footer; "
+                "confirm it is one",
+                source_loc=loc,
+                excerpt=sentence,
+            )
+        )
+    if len(confirm) > MAX_MISSING_LISTED:
+        result.findings.append(
+            Finding(
+                WARN, f"… and {len(confirm) - MAX_MISSING_LISTED} more left out as header/footer"
             )
         )
     result.details = {
-        "coverage": round(cov.ratio, 4),
+        "coverage": round(ratio, 4),
         "sentences": cov.total,
         "present": cov.present,
         "near": cov.near,
-        "missing": len(cov.missing),
+        "missing": len(missing),
+        "dropped_as_header_or_footer": len(confirm),
         "fail_below": tc.fail_below,
         "warn_below": tc.warn_below,
     }
@@ -116,8 +165,10 @@ def check_v3(doc: Document, cfg: SpecvalConfig) -> CheckResult:
         result.details["unreadable_pages"] = [p.page for p in ref.unreadable]
         result.details["unreadable_lines_left_out"] = sum(p.lines_left_out for p in ref.unreadable)
     result.summary = (
-        f"{cov.ratio:.1%} of {cov.total} sentences found "
-        f"({cov.present} exact, {cov.near} near, {len(cov.missing)} missing)"
+        f"{ratio:.1%} of {cov.total} sentences found "
+        f"({cov.present} exact, {cov.near} near, {len(missing)} missing"
+        + (f", {len(confirm)} left out as header/footer" if confirm else "")
+        + ")"
     )
     return result
 
