@@ -34,7 +34,8 @@ def check(report: DocReport, check_id: str):
 
 
 def md_path(out: Path, doc_id: str) -> Path:
-    return out / doc_id / f"{doc_id}.md"
+    """output/<id>/<name>.md; name is the id's last part (ids mirror input folders, NL1)."""
+    return out / doc_id / f"{Path(doc_id).name}.md"
 
 
 def mutate(out: Path, doc_id: str, old: str, new: str) -> int:

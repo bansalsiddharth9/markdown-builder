@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import asdict, dataclass, field, fields
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 # Bump when the format changes in a way old readers cannot handle; readers
@@ -17,7 +17,17 @@ from typing import Any
 SCHEMA_VERSION = 1
 
 STATUSES = frozenset({"ok", "failed", "no_text_layer", "unsupported", "skipped_unchanged"})
-SOURCE_TYPES = frozenset({"pdf", "html", "docx", "web", "doc"})  # doc: unsupported in v1
+SOURCE_TYPES = frozenset({"pdf", "html", "docx", "web", "doc"})  # doc: via LibreOffice (DOC1)
+
+
+def md_filename(doc_id: str) -> str:
+    """Name of a document's Markdown file in output/<id>/: the id's last part + .md.
+
+    Ids mirror the input folders ('MCC/mcc-white-paper', deviation NL1), so the
+    file is output/MCC/mcc-white-paper/mcc-white-paper.md. Shared here so the
+    converter and the validator agree on it without importing each other.
+    """
+    return f"{PurePosixPath(doc_id).name}.md"
 
 
 class ManifestError(ValueError):

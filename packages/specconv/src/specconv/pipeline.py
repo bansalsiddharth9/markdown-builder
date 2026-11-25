@@ -2,7 +2,9 @@
 
 Output per document (design: Output layout)::
 
-    output/<id>/<id>.md          converted document with front matter
+    output/<id>/<name>.md        converted document with front matter; the id
+                                 mirrors the input folders ('MCC/mcc-white-paper')
+                                 and <name> is its last part (deviation NL1)
     output/<id>/source.<ext>     exact copy of the input
     output/<id>/media/           extracted images
     output/<id>/conversion.json  tool, version, options, warnings, timings
@@ -38,12 +40,13 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from common.frontmatter import FrontMatter, FrontMatterError, render_document
-from common.manifest import Manifest, ManifestEntry
+from common.frontmatter import FrontMatter, FrontMatterError, parse_document, render_document
+from common.manifest import Manifest, ManifestEntry, md_filename
 
 from specconv import __version__
 from specconv import manifest as manifest_io
 from specconv.config import SpecconvConfig
+from specconv.converters import libreoffice
 from specconv.converters.base import MEDIA_DIR, ConversionError, ConversionResult
 from specconv.converters.docling import DoclingConverter
 from specconv.converters.pandoc import PandocConverter
@@ -59,7 +62,7 @@ log = logging.getLogger("specconv.pipeline")
 
 # Bump when HTML preparation, filters or post-processing change. It is part of the
 # options hash, so every document is converted again on the next run (deviation Q9).
-RECIPE_VERSION = 9
+RECIPE_VERSION = 10  # 10: pictures of tables with unmapped-font characters (Q23)
 FAILED_STATUSES = frozenset({"failed", "no_text_layer"})
 # Only documents that converted fine can be skipped; failed ones are always retried.
 SKIPPABLE_STATUSES = frozenset({"ok", "skipped_unchanged"})
@@ -185,6 +188,10 @@ class Pipeline:
                 "encoding": fetched.encoding,
                 "images": options_hash({"ok": fetched.images, "failed": fetched.images_failed}),
             }
+        if doc.source_type == "doc":
+            # A new LibreOffice can read the .doc differently: convert again (DOC1).
+            # Raises ConversionError when LibreOffice is missing; only this doc fails.
+            options["libreoffice"] = libreoffice.version()
         if r.converter == "docling":
             options["pdf"] = {
                 "min_chars_per_page": self.cfg.pdf.min_chars_per_page,
@@ -239,13 +246,13 @@ class Pipeline:
             return ManifestEntry(
                 **base,
                 status="unsupported",
-                warnings=[
-                    f"{doc.display_source}: legacy .doc files are not "
-                    "supported in v1; save as .docx"
-                ],
+                # Every scanned type has a route since DOC1; kept for safety.
+                warnings=[f"{doc.display_source}: no converter for this file type"],
             )
         start = time.monotonic()
         try:
+            if doc.previous_id is not None:
+                self._move_old_output(doc)
             if doc.source is not None:
                 outcome = fetch_source(doc.source, self.cfg.fetch, self.work)
                 self._fetched[doc.id] = outcome
@@ -305,16 +312,44 @@ class Pipeline:
             or prev.source_sha256 != source_sha
             or prev.converter_version != version
             or prev.options_hash != options_hash(options)
-            or not (self.output / doc.id / f"{doc.id}.md").is_file()
+            or not (self.output / doc.id / md_filename(doc.id)).is_file()
         ):
             return None
         return dataclasses.replace(prev, status="skipped_unchanged", duration_s=0.0)
 
+    def _move_old_output(self, doc: InputDoc) -> None:
+        """Move output/<old flat id>/ to the mirrored folder (deviation NL1).
+
+        Done before converting, so the front matter edited by hand (title,
+        manual_fixes, validated) is read from its new place and carried over.
+        The Markdown file is renamed and its id updated; otherwise carry-over
+        would take the folder for another document's. Skipped when the new
+        folder already exists or the old one is gone.
+        """
+        assert doc.previous_id is not None
+        old_dir, new_dir = self.output / doc.previous_id, self.output / doc.id
+        if not old_dir.is_dir() or new_dir.exists():
+            return
+        new_dir.parent.mkdir(parents=True, exist_ok=True)
+        old_dir.rename(new_dir)
+        old_md = new_dir / md_filename(doc.previous_id)
+        if old_md.is_file():
+            fm, body = parse_document(old_md.read_text(encoding="utf-8"))
+            fm.id = doc.id
+            (new_dir / md_filename(doc.id)).write_text(render_document(fm, body), encoding="utf-8")
+            if old_md.name != md_filename(doc.id):
+                old_md.unlink()
+        log.info("%s: moved old output folder %s to %s", doc.id, old_dir, new_dir)
+
     # -------------------------------------------------------------- routes
 
     def _tmp_dir(self, doc_id: str) -> Path:
-        """Hidden build folder next to the final one (same file system, so rename works)."""
-        return self.output / f".{doc_id}.tmp"
+        """Hidden build folder next to the final one (same file system, so rename works).
+
+        For 'MCC/x' that is output/MCC/.x.tmp, inside the mirrored folder (NL1).
+        """
+        final = self.output / doc_id
+        return final.with_name(f".{final.name}.tmp")
 
     def _new_tmp(self, doc_id: str) -> Path:
         """Empty build folder; leftovers of an interrupted run are removed first."""
@@ -333,6 +368,11 @@ class Pipeline:
         tmp = self._new_tmp(doc.id)
         prepared: PreparedHtml | None = None
         pandoc_input = doc.path
+        extra: dict[str, Any] = {}
+        if doc.source_type == "doc":
+            # Kept in the output folder: specval reads it for headings and tables (DOC1).
+            pandoc_input = libreoffice.doc_to_docx(doc.path, tmp)
+            extra["libreoffice"] = {"version": libreoffice.version(), "docx": pandoc_input.name}
         if r.from_format == "html":
             prepared = self._prepare_html(doc, tmp)
             pandoc_input = self.work / doc.id / "prepared.html"
@@ -341,7 +381,7 @@ class Pipeline:
         result = self.pandoc(r.from_format).convert(pandoc_input, tmp)
         flags = list(prepared.flags) if prepared else []
         warnings = list(prepared.warnings) if prepared else []
-        extra: dict[str, Any] = {"html": prepared.summary() if prepared else None}
+        extra["html"] = prepared.summary() if prepared else None
         if doc.source is not None and prepared is not None:
             record = self._fetched[doc.id].record
             extra["fetch"] = dataclasses.asdict(record)
@@ -440,7 +480,7 @@ class Pipeline:
         result = prepared.result
         tmp = self._tmp_dir(doc.id)
         final_dir = self.output / doc.id
-        md_name = f"{doc.id}.md"
+        md_name = md_filename(doc.id)
         # Read now: raises before any work if the old front matter is unreadable (P7).
         previous = read_previous(final_dir / md_name)
 
@@ -492,6 +532,8 @@ class Pipeline:
         _swap_into_place(tmp, final_dir)
 
         tool_versions = {"specconv": __version__, result.tool: result.tool_version}
+        if doc.source_type == "doc":
+            tool_versions["libreoffice"] = libreoffice.version()
         if fetched is not None:
             fetcher = "playwright" if fetched.record.render == "browser" else "httpx"
             tool_versions[fetcher] = dist_version(fetcher)

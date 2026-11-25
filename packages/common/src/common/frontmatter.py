@@ -23,9 +23,8 @@ from typing import Any
 import yaml
 
 DELIMITER = "---"
-# No "doc" here, unlike the manifest: .doc files are never converted, so they
-# never get a Markdown file.
-SOURCE_TYPES = frozenset({"pdf", "html", "docx", "web"})
+# "doc": legacy Word, converted through LibreOffice since deviation DOC1.
+SOURCE_TYPES = frozenset({"pdf", "html", "docx", "web", "doc"})
 
 
 class FrontMatterError(ValueError):

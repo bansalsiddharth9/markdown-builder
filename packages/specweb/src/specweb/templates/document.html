@@ -62,6 +62,9 @@
     {% elif source_kind == "docx" %}
       <p><a href="{{ api }}/source">Download the DOCX</a> · preview below</p>
       <article class="markdown docx">{{ docx_preview | safe }}</article>
+    {% elif source_kind == "doc" and docx_preview %}
+      <p><a href="{{ api }}/source">Download the DOC</a> · preview below, from the copy LibreOffice saved as DOCX</p>
+      <article class="markdown docx">{{ docx_preview | safe }}</article>
     {% else %}
       <p>No source preview.</p>
     {% endif %}

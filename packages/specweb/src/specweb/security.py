@@ -1,8 +1,8 @@
 """Protections for an open internal port (design: Security).
 
 - Uploads: at most max_files per job and max_file_mb per file; only .pdf,
-  .html, .htm and .docx, and the content must match the extension (checked
-  with filetype and the file's own structure, not the name).
+  .html, .htm, .docx and .doc, and the content must match the extension
+  (checked with filetype and the file's own structure, not the name).
 - URLs: private, loopback and link-local addresses are refused on submission
   (specconv's HostGuard); the worker also makes the fetch itself refuse them,
   after every redirect and for page images. fetch_allowlist permits named
@@ -65,6 +65,19 @@ def _is_docx(data: bytes) -> bool:
         return False
 
 
+# Every Word 97-2003 file is an OLE2 compound file and starts with these bytes.
+OLE2_SIGNATURE = bytes.fromhex("d0cf11e0a1b11ae1")
+
+
+def _is_doc(data: bytes) -> bool:
+    """True for an OLE2 compound file, the container of Word 97-2003 (DOC1).
+
+    The converter checks the same signature again: LibreOffice would open a
+    renamed text file as a document.
+    """
+    return data.startswith(OLE2_SIGNATURE)
+
+
 def _is_html(data: bytes) -> bool:
     """A loose test: text (no NUL bytes, not a known binary type) with markup.
 
@@ -89,6 +102,7 @@ def check_content(upload: Upload) -> None:
     ok = {
         ".pdf": kind is not None and kind.mime == "application/pdf",
         ".docx": _is_docx(upload.data),
+        ".doc": _is_doc(upload.data),
         ".html": _is_html(upload.data),
         ".htm": _is_html(upload.data),
     }.get(ext, True)  # other extensions are refused by the job checks

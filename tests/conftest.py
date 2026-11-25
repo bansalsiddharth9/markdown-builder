@@ -55,3 +55,49 @@ def _no_internet(monkeypatch: pytest.MonkeyPatch) -> None:
         return real_connect(self, address)
 
     monkeypatch.setattr(socket.socket, "connect", guarded)
+
+
+@pytest.fixture(scope="session")
+def doc_fixture(tmp_path_factory: pytest.TempPathFactory, fixtures: dict[str, Path]) -> Path:
+    """sample-spec.doc: the DOCX fixture saved as legacy Word by LibreOffice.
+
+    Skips the test where LibreOffice is not installed. A private profile
+    folder keeps it from clashing with another running LibreOffice.
+    """
+    import shutil
+    import subprocess
+
+    soffice = shutil.which("soffice") or shutil.which("libreoffice")
+    if soffice is None:
+        pytest.skip("LibreOffice (soffice) not installed")
+    import docx
+
+    out = tmp_path_factory.mktemp("doc")
+    profile = tmp_path_factory.mktemp("lo-profile")
+    # LibreOffice garbles a table that ends the document when it WRITES .doc (the
+    # cells come out as one run of text); Word always ends with a paragraph.
+    staged = tmp_path_factory.mktemp("doc-src") / "sample-spec.docx"
+    document = docx.Document(str(fixtures["docx"]))
+    document.add_paragraph("")
+    document.save(str(staged))
+    subprocess.run(
+        [soffice, f"-env:UserInstallation={profile.as_uri()}", "--headless", "--norestore",
+         "--convert-to", "doc:MS Word 97", "--outdir", str(out), str(staged)],
+        check=True, capture_output=True, timeout=300,
+    )  # fmt: skip
+    return out / "sample-spec.doc"
+
+
+@pytest.fixture(scope="session")
+def unmapped_pdf(tmp_path_factory: pytest.TempPathFactory, fixture_mod: dict) -> Path:
+    """A one-page PDF whose table cells use a font without a Unicode map
+    (the EBU Tech 3264 code-page case; deviations Q23 and V-ac)."""
+    return fixture_mod["unmapped_font_pdf"](tmp_path_factory.mktemp("unmapped") / "codes.pdf")
+
+
+@pytest.fixture(scope="session")
+def mapped_pdf(tmp_path_factory: pytest.TempPathFactory, fixture_mod: dict) -> Path:
+    """The same page with ordinary Helvetica in every cell (control case)."""
+    return fixture_mod["unmapped_font_pdf"](
+        tmp_path_factory.mktemp("mapped") / "codes.pdf", unmapped=False
+    )

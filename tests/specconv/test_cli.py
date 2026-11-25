@@ -116,6 +116,21 @@ def test_check_deps_prints_versions(repo_root: Path) -> None:
     assert "model docling-project/docling-layout-heron 8f39ad3c0b4c" in result.output
 
 
+def test_check_deps_reports_libreoffice_but_does_not_need_it(
+    repo_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """LibreOffice is only needed for .doc files (DOC1): listed, never fatal."""
+    from specconv.converters import libreoffice
+
+    config = str(repo_root / "config/specconv.yaml")
+    if libreoffice.find_soffice() is not None:
+        assert "libreoffice " in invoke("check-deps", "--config", config).output
+    monkeypatch.setattr(libreoffice, "find_soffice", lambda: None)
+    result = invoke("check-deps", "--config", config)
+    assert result.exit_code == 0, result.output
+    assert "libreoffice not found (needed only for .doc files)" in result.output
+
+
 def test_missing_models_exit_2_with_hint(tmp_path: Path) -> None:
     (tmp_path / "input" / "a.pdf").write_bytes(b"%PDF-1.4")
     result = invoke("convert", "--input", "input")  # built-in default: ./models (absent)

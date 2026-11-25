@@ -145,3 +145,41 @@ def test_approve_allows_front_matter_edits_after_validation(out: Path, tmp_path:
     result = run("approve", doc_id, "--output", str(out), "--validation", str(val))
     assert result.exit_code == 0, result.output
     assert fm(out, doc_id)[0].title == "Sample spec"
+
+
+# ------------------------------------------- mirrored input folders (NL1)
+
+
+def nest(out: Path, doc_id: str, folder: str) -> str:
+    """Move a converted document to output/<folder>/<id>/, as specconv lays out a
+    file from input/<folder>/ since NL1, and return its new id."""
+    new_id = f"{folder}/{doc_id}"
+    (out / folder).mkdir()
+    (out / doc_id).rename(out / new_id)
+    md = out / new_id / f"{doc_id}.md"
+    text = md.read_text(encoding="utf-8").replace(f"id: {doc_id}\n", f"id: {new_id}\n", 1)
+    md.write_text(text, encoding="utf-8")
+    manifest = json.loads((out / "manifest.json").read_text(encoding="utf-8"))
+    for entry in manifest["documents"]:
+        if entry["id"] == doc_id:
+            entry["id"] = new_id
+    (out / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    return new_id
+
+
+def test_nested_document_validated_and_approved(out: Path, tmp_path: Path) -> None:
+    doc_id = nest(out, DOC_IDS["html"], "SCC Specs")
+    val = tmp_path / "val"
+    assert validate_all(out, val, "--doc", doc_id).exit_code in (0, 1)
+    report = json.loads((val / f"{doc_id}.json").read_text(encoding="utf-8"))
+    assert (val / f"{doc_id}.md").is_file()  # validation/ mirrors the folders too
+    assert report["id"] == doc_id
+    assert report["overall"] not in ("not_converted", "error")
+    assert not any("not readable" in note for note in report.get("notes", []))
+    result = run(
+        "approve", doc_id, "--output", str(out), "--validation", str(val), "--by", "Ana",
+        "--override", "test",
+    )  # fmt: skip
+    assert result.exit_code == 0, result.output
+    front, _ = fm(out, doc_id)
+    assert front.validated["by"] == "Ana"

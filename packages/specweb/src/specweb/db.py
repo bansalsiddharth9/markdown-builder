@@ -88,7 +88,7 @@ class Document(Base):
     stored_name: Mapped[str | None] = mapped_column(String(200))  # in the job's input/
     url: Mapped[str | None] = mapped_column(Text)  # None for uploaded files
     render: Mapped[str | None] = mapped_column(String(16))  # URLs: "static" or "browser"
-    source_type: Mapped[str] = mapped_column(String(16))  # pdf, html, docx or web
+    source_type: Mapped[str] = mapped_column(String(16))  # pdf, html, docx, doc or web
     doc_id: Mapped[str | None] = mapped_column(String(200))  # specconv's id, once converted
     # Conversion status from specconv's manifest (ok, failed, ...) or a job state.
     status: Mapped[str] = mapped_column(String(32), default="queued")

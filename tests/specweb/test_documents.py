@@ -179,6 +179,18 @@ def test_docx_source_preview(client, fixtures) -> None:
     assert f"/api/documents/{job['id']}/s/source" in page  # and a download link
 
 
+def test_doc_source_preview_uses_libreoffice_copy(client, fake_runner, fixtures) -> None:
+    """A .doc has no preview of its own; LibreOffice's .docx is shown (DOC1)."""
+    fake_runner.doc_docx = fixtures["docx"].read_bytes()
+    doc = bytes.fromhex("d0cf11e0a1b11ae1") + b"\x00" * 504
+    job = upload(client, files=[("old.doc", doc)]).json()
+    page = client.get(f"/documents/{job['id']}/old?tab=side-by-side").text
+    assert "Sample Caption Display Specification" in page
+    assert "Download the DOC" in page and "LibreOffice" in page
+    source = client.get(f"/api/documents/{job['id']}/old/source")
+    assert source.content == doc and source.headers["content-type"] == "application/msword"
+
+
 def test_review_queue_tab_links_and_checkboxes(client, fake_runner) -> None:
     fake_runner.validation = "fail"
     job = upload(client, files=[("b.pdf", PDF)]).json()

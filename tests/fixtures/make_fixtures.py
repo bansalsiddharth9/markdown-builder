@@ -382,6 +382,86 @@ def render_pdfs(dest: Path, html: Path) -> dict[str, Path]:
     }
 
 
+# ---------------------------------------------------- unmapped-font PDF
+
+UNMAPPED_SENTENCE = "The table below lists two control codes for testing only."
+
+
+def unmapped_font_pdf(path: Path, unmapped: bool = True) -> Path:
+    """A one-page A4 PDF with a ruled table (header and five rows) whose
+    "Glyph" cells in rows 01 and 02 use a font without a Unicode map, like the
+    code-page tables in EBU Tech 3264.
+
+    The font (Type1, not embedded, no ToUnicode) names its glyphs /G01../G03,
+    which no glyph list knows, so readers report "(cid:1)" or "/G01". Code
+    0x41 has no entry in its Differences and falls back to a plain "A": a wrong
+    letter that looks fine. With unmapped=False those cells use Helvetica
+    ("XY", "ZA"), as a control. A Times-Roman character with no name in its
+    encoding sits above the sentence: pdfminer cannot map it either, but its
+    font is an ordinary one. Written by hand: Chromium-made fixtures always
+    have a Unicode map. The table spans x 50..450 and y 550..700 (PDF points),
+    the Glyph column x 250..350, the two rows y 625..675.
+    """
+    glyph_font = "/F2" if unmapped else "/F1"
+    glyph_cells = ("<0102>", "<0341>") if unmapped else ("(XY)", "(ZA)")
+    rows = [
+        ("(Code)", "(Name)", "(Glyph)", "(Use)"),
+        ("(01)", "(Alpha)", glyph_cells[0], "(Start)"),
+        ("(02)", "(Beta)", glyph_cells[1], "(Stop)"),
+        ("(03)", "(Gamma)", "(G)", "(Pause)"),
+        ("(04)", "(Delta)", "(D)", "(Resume)"),
+        ("(05)", "(Epsilon)", "(E)", "(Reset)"),
+    ]
+    ops = ["0.5 w"]
+    for i in range(len(rows) + 1):  # horizontal rules, 25 pt apart from y 700 down
+        ops.append(f"50 {700 - 25 * i} m 450 {700 - 25 * i} l S")
+    for x in (50, 150, 250, 350, 450):  # vertical rules
+        ops.append(f"{x} 550 m {x} 700 l S")
+    ops.append(f"BT /F1 11 Tf 50 740 Td ({UNMAPPED_SENTENCE}) Tj ET")
+    # Code 127 in plain Times-Roman: StandardEncoding has nothing there, so
+    # pdfminer reports "(cid:127)" (seen in EBU's Times-Roman). The font has no
+    # made-up glyph names, so it must not count as unmapped.
+    ops.append("BT /F3 11 Tf 50 760 Td <7F> Tj ET")
+    for r, row in enumerate(rows):
+        for c, cell in enumerate(row):
+            font = glyph_font if r in (1, 2) and c == 2 else "/F1"
+            ops.append(f"BT {font} 11 Tf {58 + 100 * c} {683 - 25 * r} Td {cell} Tj ET")
+    content = ("\n".join(ops) + "\n").encode()
+    widths = " ".join(["600"] * 65)  # codes 1..65
+    objects = [
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] "
+        b"/Resources << /Font << /F1 5 0 R /F2 6 0 R /F3 8 0 R >> >> /Contents 4 0 R >>",
+        b"<< /Length %d >>\nstream\n" % len(content) + content + b"endstream",
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /ABCDEF+MSTT31test /FirstChar 1 "
+        b"/LastChar 65 /Widths [" + widths.encode() + b"] /FontDescriptor 7 0 R "
+        b"/Encoding << /Type /Encoding /Differences [1 /G01 /G02 /G03] >> >>",
+        # A descriptor gives the font its name in pdfminer (without one: "unknown").
+        b"<< /Type /FontDescriptor /FontName /ABCDEF+MSTT31test /Flags 4 "
+        b"/FontBBox [0 0 1000 1000] /ItalicAngle 0 /Ascent 900 /Descent -100 "
+        b"/CapHeight 700 /StemV 80 >>",
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Times-Roman >>",
+    ]
+    out = bytearray(b"%PDF-1.4\n")
+    offsets = []
+    for number, body in enumerate(objects, start=1):
+        offsets.append(len(out))
+        out += b"%d 0 obj\n" % number + body + b"\nendobj\n"
+    xref = len(out)
+    out += b"xref\n0 %d\n0000000000 65535 f \n" % (len(objects) + 1)
+    for offset in offsets:
+        out += b"%010d 00000 n \n" % offset
+    out += b"trailer\n<< /Size %d /Root 1 0 R >>\nstartxref\n%d\n%%%%EOF\n" % (
+        len(objects) + 1,
+        xref,
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(bytes(out))
+    return path
+
+
 # --------------------------------------------------------------------- all
 
 

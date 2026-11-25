@@ -44,7 +44,9 @@ def check_v3(doc: Document, cfg: SpecvalConfig) -> CheckResult:
     Fail when coverage is below text_coverage.fail_below (default 98%), warn
     below warn_below (default 99.5%), else pass. Missing sentences (up to 50)
     are listed with that severity, or as info when the check passes
-    (deviations V-u). Code is left out (V6 compares it). Not applicable
+    (deviations V-u). A PDF page with characters in a font without a Unicode
+    map adds a warning to check it by eye; its lines with them are not
+    counted (V-ac). Code is left out (V6 compares it). Not applicable
     without a source reference or readable Markdown.
     """
     ref, md = doc.reference, doc.md
@@ -53,9 +55,13 @@ def check_v3(doc: Document, cfg: SpecvalConfig) -> CheckResult:
         result.status, result.summary = NOT_APPLICABLE, "no source reference available"
         return result
     pdf = ref.kind == "pdf"
+    # A .doc brings its own text, read with catdoc, not from LibreOffice's .docx
+    # (DOC1); it includes code, which is fine: the Markdown text below does too.
+    # A PDF with unmapped-font characters brings its text without those lines (V-ac).
+    segments = ref.text_segments if ref.text_segments is not None else ref.segments
     source = [
         (join_pdf_hyphenation(s.text) if pdf else s.text, s.source_loc)
-        for s in ref.segments
+        for s in segments
         if s.ctx != CODE  # code blocks are compared by V6
     ]
     # All Markdown text, code included: a source sentence may sit in a code
@@ -70,6 +76,21 @@ def check_v3(doc: Document, cfg: SpecvalConfig) -> CheckResult:
     elif cov.ratio < tc.warn_below:
         result.status = WARN
     severity = result.status if result.status != PASS else INFO
+    # Pages whose lines with font-without-Unicode characters were left out of
+    # the source text (V-ac): nothing to compare, so a person must look.
+    for page in ref.unreadable:
+        result.findings.append(
+            Finding(
+                WARN,
+                f"page {page.page}: {page.chars} character(s) drawn with a font that has "
+                f"no Unicode mapping ({', '.join(page.fonts)}); the PDF cannot say which "
+                f"characters they are, so {page.lines_left_out} line(s) were left out of "
+                "this check. Compare the page with the Markdown by eye",
+                source_loc=f"page {page.page}",
+            )
+        )
+    if ref.unreadable and result.status == PASS:
+        result.status = WARN
     for sentence, loc in cov.missing[:MAX_MISSING_LISTED]:
         result.findings.append(
             Finding(severity, "missing sentence", source_loc=loc, excerpt=sentence)
@@ -89,6 +110,11 @@ def check_v3(doc: Document, cfg: SpecvalConfig) -> CheckResult:
         "fail_below": tc.fail_below,
         "warn_below": tc.warn_below,
     }
+    if ref.text_from is not None:
+        result.details["text_from"] = ref.text_from
+    if ref.unreadable:
+        result.details["unreadable_pages"] = [p.page for p in ref.unreadable]
+        result.details["unreadable_lines_left_out"] = sum(p.lines_left_out for p in ref.unreadable)
     result.summary = (
         f"{cov.ratio:.1%} of {cov.total} sentences found "
         f"({cov.present} exact, {cov.near} near, {len(cov.missing)} missing)"
@@ -218,7 +244,8 @@ def _check_v5_pdf(doc: Document, cfg: SpecvalConfig, result: CheckResult) -> Che
     pdfplumber's by header similarity and report cells where they disagree
     (warn: two extractors, the second also approximate). A different table
     shape also warns. Docling tables pdfplumber did not find: every cell
-    value must appear in the PDF text, otherwise fail."""
+    value must appear in the PDF text, otherwise fail. Cells unreadable in the
+    source itself (unmapped fonts, V-ac) are only counted."""
     ref, md = doc.reference, doc.md
     assert ref is not None and md is not None
     # Deviations FS-1: pdfplumber reads boxes in diagrams as tables with only empty cells.
@@ -226,6 +253,13 @@ def _check_v5_pdf(doc: Document, cfg: SpecvalConfig, result: CheckResult) -> Che
     ignored = len(ref.tables) - len(plumber)
     findings: list[Finding] = []
     paired_md: set[int] = set()
+    # V-ac: when the PDF has characters in fonts without a Unicode map, a
+    # Markdown cell with U+FFFD (Docling's "unknown glyph") and a pdfplumber
+    # cell with "(cid:N)" say the same thing: unreadable in the source. They are
+    # counted, not reported; V3 asks for those pages to be checked by eye.
+    # Without such fonts, U+FFFD is the converter's error and is reported.
+    unreadable_source = bool(ref.unreadable)
+    unreadable_cells = 0
     # Tables are in page order on both sides, so each pdfplumber table looks
     # only at the next 8 unpaired Markdown tables after the last pair, and
     # needs a header similarity of at least 80 (rapidfuzz ratio, 0-100).
@@ -263,6 +297,9 @@ def _check_v5_pdf(doc: Document, cfg: SpecvalConfig, result: CheckResult) -> Che
         for r, (a, b) in enumerate(zip(src_grid, md_grid, strict=True)):
             for c, (s, m) in enumerate(zip(a, b, strict=True)):
                 # pdfplumber leaves the positions a merged cell covers empty
+                if unreadable_source and ("(cid:" in s or "\ufffd" in m):
+                    unreadable_cells += 1
+                    continue
                 if s and not pdf_cells_agree(s, m):
                     disagreements.append((r, c, s, m))
         for r, c, s, m in disagreements[:MAX_TABLE_FINDINGS]:
@@ -284,6 +321,9 @@ def _check_v5_pdf(doc: Document, cfg: SpecvalConfig, result: CheckResult) -> Che
             continue
         for r, row in enumerate(out.grid):
             for cell in row:
+                if unreadable_source and "\ufffd" in cell:
+                    unreadable_cells += 1
+                    continue
                 if cell and _squash(cell) not in text:
                     not_found += 1
                     # All are counted; only the first 30 are listed.
@@ -304,6 +344,7 @@ def _check_v5_pdf(doc: Document, cfg: SpecvalConfig, result: CheckResult) -> Che
         "pdfplumber_tables": len(ref.tables),
         "pdfplumber_empty_ignored": ignored,
         "cells_not_found": not_found,
+        "cells_unreadable": unreadable_cells,
     }
     result.summary = (
         f"{len(paired_md)} table(s) compared with pdfplumber; "

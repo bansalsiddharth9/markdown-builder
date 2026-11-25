@@ -67,6 +67,20 @@ SYSTEM_TOOLS = [
         "run as a separate program (HTML and DOCX conversion); not linked or distributed",
     ),
     (
+        "LibreOffice Writer",
+        "7.3 (development machine), Debian bookworm's in the Docker image",
+        "MPL-2.0",
+        "run as a separate program: saves legacy .doc files as .docx (deviation DOC1); "
+        "not linked or distributed",
+    ),
+    (
+        "catdoc",
+        "0.95",
+        "GPL-2.0-or-later",
+        "run as a separate program by specval: reads the text of .doc files for V3 "
+        "(deviation DOC1); not linked or distributed",
+    ),
+    (
         "Chromium headless shell (Playwright build)",
         "159.0.8154.6",
         "BSD-3-Clause and others",
@@ -209,9 +223,9 @@ def render(packages: list[tuple[str, str, str]]) -> str:
         "| --- | --- | --- | --- |",
         *[f"| {n} | {v} | {lic} | {use} |" for n, v, lic, use in SYSTEM_TOOLS],
         "",
-        "Pandoc is GPL: it is only executed as a separate program and not distributed with "
-        "this code, which GPL permits for internal use. If the Docker image is ever shipped "
-        "outside the company, Pandoc's GPL terms apply to that image.",
+        "Pandoc and catdoc are GPL: they are only executed as separate programs and not "
+        "distributed with this code, which GPL permits for internal use. If the Docker image "
+        "is ever shipped outside the company, their GPL terms apply to that image.",
         "",
         "## Model weights",
         "",

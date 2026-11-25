@@ -19,6 +19,9 @@
   Its original text from the PDF is written instead, as a code block, so
   characters like ``<`` and ``[`` stay exact (deviations Q18).
 - The Docling document is also saved as JSON for debugging.
+- A table holding characters from a font without a Unicode map (the PDF
+  stores their pictures, not which characters they are) gets a note and a
+  picture of the table from the PDF page under it (glyphs.py, deviation Q23).
 - Text Docling classifies as page header or footer ("furniture") is left out
   of the Markdown, as Docling does; it is listed in conversion.json so a
   reviewer can see exactly what was dropped (a code line at the bottom of a
@@ -35,6 +38,7 @@ from importlib.metadata import version as dist_version
 from pathlib import Path
 from typing import Any
 
+from specconv.converters import glyphs
 from specconv.converters.base import MEDIA_DIR, ConversionError, ConversionResult
 from specconv.models import PINNED_MODELS, missing_models
 
@@ -74,9 +78,14 @@ def index_as_list(item: Any) -> str:
     return "\n".join(lines)
 
 
-def _span_aware_table_serializer() -> Any:
+def _span_aware_table_serializer(unmapped: dict[str, dict[str, Any]] | None = None) -> Any:
     """A Markdown table serializer that writes merged-cell tables as HTML and
-    document indexes as bullet lists."""
+    document indexes as bullet lists.
+
+    unmapped maps a table's self_ref to its picture (glyphs.table_images): such
+    a table gets a note and the picture under it (deviation Q23).
+    """
+    pictures = unmapped or {}
     from docling_core.transforms.serializer.base import SerializationResult
     from docling_core.transforms.serializer.common import create_ser_result
     from docling_core.transforms.serializer.markdown import MarkdownTableSerializer
@@ -85,6 +94,17 @@ def _span_aware_table_serializer() -> Any:
         """Docling's Markdown table serializer with two special cases (see module doc)."""
 
         def serialize(self, *, item, doc_serializer, doc, **kwargs) -> SerializationResult:
+            """The table (see _table), followed by its note and picture when it
+            holds characters from a font without a Unicode map (Q23)."""
+            result = self._table(item=item, doc_serializer=doc_serializer, doc=doc, **kwargs)
+            info = pictures.get(item.self_ref)
+            if info is None or not result.text:
+                return result
+            return create_ser_result(
+                text=f"{result.text}\n\n{glyphs.note_and_picture(info)}", span_source=item
+            )
+
+        def _table(self, *, item, doc_serializer, doc, **kwargs) -> SerializationResult:
             """Index -> bullet list; merged cells -> HTML; anything else -> Docling's default.
 
             Nested and excluded tables always go to the default serializer, which
@@ -217,6 +237,7 @@ class DoclingConverter:
             "merged_cell_tables": "html",
             "undecoded_formulas": "original text as code",
             "document_index": "bullet list",
+            "unmapped_glyph_tables": "picture added under the table",
             "models": {m.repo_id: m.revision for m in PINNED_MODELS},
         }
 
@@ -291,10 +312,22 @@ class DoclingConverter:
         doc = doc._with_pictures_refs(
             image_dir=out_dir / MEDIA_DIR, page_no=None, uri_prefix=f"{MEDIA_DIR}/"
         )
+        # Tables with characters in a font without a Unicode map get a picture
+        # from the PDF page under them (deviation Q23).
+        unmapped_chars = glyphs.unmapped_chars(src)
+        unmapped = glyphs.table_images(doc, src, out_dir, unmapped_chars) if unmapped_chars else {}
+        if unmapped:
+            pages = sorted({info["page"] for info in unmapped.values()})
+            where = ("page " if len(pages) == 1 else "pages ") + ", ".join(map(str, pages))
+            warnings.append(
+                f"{len(unmapped)} table(s) on {where} use a font with no Unicode map, so "
+                "some symbols are \ufffd or wrong letters; a picture of each table from "
+                "the PDF is added under it"
+            )
         serializer = MarkdownDocSerializer(
             doc=doc,
             text_serializer=_formula_text_serializer(),
-            table_serializer=_span_aware_table_serializer(),
+            table_serializer=_span_aware_table_serializer(unmapped),
             params=MarkdownParams(image_mode=ImageRefMode.REFERENCED),
         )
         markdown = serializer.serialize().text
@@ -330,5 +363,6 @@ class DoclingConverter:
                 ),
                 "pictures": len(doc.pictures),
                 "dropped_as_page_furniture": furniture,
+                "tables_with_unmapped_glyphs": list(unmapped.values()),
             },
         )

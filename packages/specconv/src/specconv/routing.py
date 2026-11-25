@@ -5,12 +5,12 @@ from __future__ import annotations
 import re
 import unicodedata
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from specconv.config import Source
 
-CONVERTIBLE = {".html": "html", ".htm": "html", ".docx": "docx", ".pdf": "pdf"}
-UNSUPPORTED = {".doc"}  # legacy Word: reported as unsupported, not converted
+# .doc (legacy Word) goes through LibreOffice to .docx first (deviation DOC1).
+CONVERTIBLE = {".html": "html", ".htm": "html", ".docx": "docx", ".pdf": "pdf", ".doc": "doc"}
 
 
 @dataclass(frozen=True)
@@ -18,10 +18,12 @@ class InputDoc:
     """One document to process: a local file or a web source."""
 
     id: str
-    source_type: str  # pdf | html | docx | web | doc (unsupported)
+    source_type: str  # pdf | html | docx | web | doc
     path: Path | None  # local file (None for web sources)
     rel_path: str | None  # path relative to the input folder, POSIX style
     source: Source | None = None  # web sources only
+    # Id from before NL1 whose output folder must be moved to this id's folder.
+    previous_id: str | None = None
 
     @property
     def display_source(self) -> str:
@@ -46,6 +48,22 @@ def slugify(name: str) -> str:
     text = unicodedata.normalize("NFKD", name).encode("ascii", "ignore").decode("ascii")
     slug = re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")
     return slug or "document"
+
+
+def file_id(rel: str, slug: str) -> str:
+    """The id of a file at rel: its input folder path plus the slug (deviation NL1).
+
+    'MCC/MCC White Paper.pdf' -> 'MCC/mcc-white-paper'; a file directly in the input
+    folder keeps a plain slug. Folder names are kept exactly, so the output and
+    validation folders mirror the input folders the user organised.
+    """
+    folder = PurePosixPath(rel).parent
+    return slug if folder == PurePosixPath(".") else f"{folder.as_posix()}/{slug}"
+
+
+def _same_folder(doc_id: str, rel: str) -> bool:
+    """True when doc_id already sits in rel's input folder (an id made since NL1)."""
+    return PurePosixPath(doc_id).parent == PurePosixPath(rel).parent
 
 
 def _unique(slug: str, taken: set[str]) -> str:
@@ -83,11 +101,14 @@ def scan(
 
     - Web sources keep their sources.yaml ids.
     - A local file keeps the id recorded for its path in the previous
-      manifest (previous_ids: relative path -> id).
-    - A new file gets a slug of its file name, with a numeric suffix if the
-      slug is used by another input, a previous manifest entry, or any other
-      name in `reserved` (e.g. existing output folders). Files are visited in
-      sorted path order, so the result does not depend on directory order.
+      manifest (previous_ids: relative path -> id), if that id is in the
+      file's folder. A flat id from before NL1 is replaced by a new one and
+      returned as previous_id, so the pipeline moves its old output folder.
+    - A new file gets its folder path plus a slug of its file name (file_id),
+      with a numeric suffix if that id is used by another input, a previous
+      manifest entry, or any other name in `reserved` (e.g. existing output
+      folders). Files are visited in sorted path order, so the result does not
+      depend on directory order.
     """
     previous_ids = previous_ids or {}
     taken = {s.id for s in sources} | set(previous_ids.values()) | (reserved or set())
@@ -107,24 +128,27 @@ def scan(
             ext = path.suffix.lower()
             if ext in CONVERTIBLE:
                 found.append((path, rel, CONVERTIBLE[ext]))
-            elif ext in UNSUPPORTED:
-                found.append((path, rel, "doc"))
             else:
                 skipped.append(rel)
 
     web_ids = {s.id for s in sources}
     ids: dict[str, str] = {}
+    moved: dict[str, str] = {}  # rel -> flat id from before NL1
     for _, rel, _ in found:  # first: files the previous manifest already knows
         old = previous_ids.get(rel)
-        if old is not None and old not in web_ids and old not in ids.values():
+        if old is None or old in web_ids or old in ids.values():
+            continue
+        if _same_folder(old, rel):
             ids[rel] = old
-    for path, rel, _ in found:  # then: new files
+        else:
+            moved[rel] = old
+    for path, rel, _ in found:  # then: new files (and moved ones)
         if rel not in ids:
-            ids[rel] = _unique(slugify(path.stem), taken)
+            ids[rel] = _unique(file_id(rel, slugify(path.stem)), taken)
             taken.add(ids[rel])
 
     docs = [
-        InputDoc(id=ids[rel], source_type=kind, path=path, rel_path=rel)
+        InputDoc(id=ids[rel], source_type=kind, path=path, rel_path=rel, previous_id=moved.get(rel))
         for path, rel, kind in found
     ]
     docs += [
@@ -152,6 +176,9 @@ def route(doc: InputDoc) -> Route:
         return Route("pandoc:html", "pandoc", "html")
     if doc.source_type == "docx":
         return Route("pandoc:docx", "pandoc", "docx")
+    if doc.source_type == "doc":
+        # LibreOffice saves it as .docx, then the DOCX route (deviation DOC1).
+        return Route("libreoffice+pandoc:docx", "pandoc", "docx")
     if doc.source_type == "pdf":
         return Route("docling", "docling")  # text-layer routing: phase 3
     return Route("none:unsupported", None)

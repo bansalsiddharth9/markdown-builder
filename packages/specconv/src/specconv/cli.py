@@ -17,6 +17,7 @@ from specconv import __version__, deps, models, routing
 from specconv import fetch as fetching
 from specconv import manifest as manifest_io
 from specconv.config import ConfigError, Source, SpecconvConfig, load_config, load_sources
+from specconv.converters import libreoffice
 from specconv.pipeline import Pipeline
 from specconv.runlog import run_logging, run_timestamp
 
@@ -79,6 +80,24 @@ def _fail_config(message: str) -> typer.Exit:
     """Print the error and return an exit-2 exception for the caller to raise."""
     typer.echo(f"error: {message}", err=True)
     return typer.Exit(EXIT_CONFIG)
+
+
+def _existing_doc_folders(output: Path) -> set[str]:
+    """Ids of the document folders already in output/, also nested ones (NL1).
+
+    A document folder is one that holds <its name>.md ('MCC/x/x.md' -> 'MCC/x').
+    Top-level folders are always included, as before NL1, so a plain id never
+    lands in a mirrored input folder such as output/MCC/. Hidden build folders
+    (.x.tmp, .x.old) are ignored.
+    """
+    if not output.is_dir():
+        return set()
+    found = {p.name for p in output.iterdir() if p.is_dir() and not p.name.startswith(".")}
+    for md in output.rglob("*.md"):
+        rel = md.parent.relative_to(output)
+        if md.stem == md.parent.name and not any(part.startswith(".") for part in rel.parts):
+            found.add(rel.as_posix())
+    return found
 
 
 def _load(config: Path | None, sources: Path | None) -> tuple[SpecconvConfig, list[Source]]:
@@ -236,11 +255,7 @@ def convert(
         raise _fail_config(f"{manifest_io.manifest_path(output)}: {exc}") from exc
     # Existing output folders are reserved, so a new file never gets the id (and folder)
     # of an old document that is no longer in the manifest (deviation P6).
-    existing_folders = (
-        {p.name for p in output.iterdir() if p.is_dir() and not p.name.startswith(".")}
-        if output.is_dir()
-        else set()
-    )
+    existing_folders = _existing_doc_folders(output)
     scan = routing.scan(
         input,
         srcs,
@@ -282,7 +297,7 @@ def convert(
         )
         log.info("tool versions: %s", deps.tool_versions())
         for rel in scan.skipped:
-            log.info("skipped (not a PDF, HTML or DOCX file): %s", rel)
+            log.info("skipped (not a PDF, HTML, DOCX or DOC file): %s", rel)
         pipeline = Pipeline(cfg, output, work, previous=previous, force=force, split=split)
         result = pipeline.run(docs, full_run=only is None)
         counts: dict[str, int] = {}
@@ -304,13 +319,22 @@ def convert(
 
 @app.command("check-deps")
 def check_deps(config: ConfigOpt = None) -> None:
-    """Check that Pandoc, Docling, its models and Chromium are installed; print versions."""
+    """Check that Pandoc, Docling, its models and Chromium are installed; print versions.
+
+    LibreOffice is listed too, but only .doc files need it, so it is not required.
+    """
     cfg, _ = _load(config, None)
     _check_dependencies(
         cfg, need_pandoc=True, need_docling=True, need_chromium=True, need_models=True
     )
     for name, ver in deps.tool_versions().items():
         typer.echo(f"{name} {ver}")
+    # Optional: only .doc files need LibreOffice (DOC1), so a missing one is listed,
+    # not an error; such a file fails on its own with the same hint.
+    if libreoffice.find_soffice() is None:
+        typer.echo("libreoffice not found (needed only for .doc files)")
+    else:
+        typer.echo(f"libreoffice {libreoffice.version()}")
     for model in models.PINNED_MODELS:
         typer.echo(f"model {model.repo_id} {model.revision[:12]}")
 

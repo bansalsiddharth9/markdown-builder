@@ -68,6 +68,10 @@ def test_file_too_large(make_client) -> None:
         ("a.html", b"\x00\x01binary", False),
         ("a.docx", docx_bytes(), True),
         ("a.docx", PDF, False),
+        # Word 97-2003: the OLE2 signature (DOC1); a renamed text file is refused.
+        ("a.doc", bytes.fromhex("d0cf11e0a1b11ae1") + b"\x00" * 504, True),
+        ("a.doc", b"just text", False),
+        ("a.doc", docx_bytes(), False),
     ],
 )
 def test_content_checked_not_just_extension(make_client, name, content, ok) -> None:

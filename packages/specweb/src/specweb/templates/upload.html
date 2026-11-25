@@ -11,8 +11,8 @@
 Converted files are for <strong>internal reference only</strong>.</p>
 {% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
 <form method="post" action="/jobs" enctype="multipart/form-data" class="upload">
-  <label>Files (PDF, HTML, DOCX)
-    <input type="file" name="files" multiple accept=".pdf,.html,.htm,.docx">
+  <label>Files (PDF, HTML, DOCX, DOC)
+    <input type="file" name="files" multiple accept=".pdf,.html,.htm,.docx,.doc">
   </label>
   {# One URL per line, optionally followed by "browser" (deviation WB6):
      no per-row controls, so no JavaScript is needed. #}

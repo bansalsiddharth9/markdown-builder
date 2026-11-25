@@ -29,7 +29,14 @@ from specweb.db import Document, Job, sessions
 from specweb.settings import WebConfig
 
 # Accepted upload extensions and the source type each one maps to.
-ALLOWED_EXTENSIONS = {".pdf": "pdf", ".html": "html", ".htm": "html", ".docx": "docx"}
+# .doc: legacy Word, converted through LibreOffice (deviation DOC1).
+ALLOWED_EXTENSIONS = {
+    ".pdf": "pdf",
+    ".html": "html",
+    ".htm": "html",
+    ".docx": "docx",
+    ".doc": "doc",
+}
 RENDER_MODES = ("static", "browser")
 
 
@@ -123,7 +130,7 @@ def check_submission(uploads: list[Upload], urls: list[UrlSource], split: int | 
         ext = PurePosixPath(upload.filename.lower()).suffix
         if ext not in ALLOWED_EXTENSIONS:
             raise JobError(
-                f"{upload.filename}: only .pdf, .html, .htm and .docx files are accepted"
+                f"{upload.filename}: only .pdf, .html, .htm, .docx and .doc files are accepted"
             )
     for source in urls:
         if not source.url.startswith(("http://", "https://")):

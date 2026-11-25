@@ -2,7 +2,7 @@
 
 Two command-line tools that turn caption specifications into a Markdown reference library and check the result:
 
-- **`specconv`** converts PDF, HTML, DOCX and web pages to Markdown (Docling for PDFs, Pandoc for the rest).
+- **`specconv`** converts PDF, HTML, DOCX, DOC and web pages to Markdown (Docling for PDFs, Pandoc for the rest; a `.doc` is first saved as `.docx` by LibreOffice).
 - **`specval`** checks each converted file against its source on its own terms and writes a report saying what passed and what a person must check.
 
 A web UI, **`specweb`**, puts both behind a browser page for the internal network (see [Web app](#web-app-specweb)).
@@ -39,7 +39,13 @@ Linux x86_64, about 3 GB of disk for the environment and models, and 6 GB of fre
    uv run specconv download-models
    ```
 
-5. Check everything:
+5. For legacy Word `.doc` files only: install LibreOffice (saves them as `.docx`) and catdoc (the validator reads their text with it):
+
+   ```bash
+   sudo apt install libreoffice-writer catdoc
+   ```
+
+6. Check everything:
 
    ```bash
    uv run specconv check-deps
@@ -49,7 +55,7 @@ Conversion never uses the network after this; only `specconv fetch` does.
 
 ## Daily use
 
-Put files in `input/` (PDF, HTML, HTM, DOCX; a page saved with "Save page as, complete" goes in with its `_files` folder) and list web pages in `config/sources.yaml`. Then:
+Put files in `input/` (PDF, HTML, HTM, DOCX, DOC; a page saved with "Save page as, complete" goes in with its `_files` folder) and list web pages in `config/sources.yaml`. Sub-folders are fine and are mirrored: `input/SCC/My Spec.pdf` becomes `output/SCC/my-spec/my-spec.md` and `validation/SCC/my-spec.md`, and its id is `SCC/my-spec`. Then:
 
 ```bash
 uv run specconv convert --input input --sources config/sources.yaml   # converts into output/
@@ -89,15 +95,18 @@ Exit codes: 0 all ok, 1 at least one document failed, 2 bad configuration or mis
 ```text
 output/
   manifest.json            one entry per document: route, versions, status, warnings
-  <id>/<id>.md             the Markdown, with front matter (title, spec_version: fill in by hand)
+  <id>/<name>.md           the Markdown, with front matter (title, spec_version: fill in by hand)
   <id>/source.<ext>        exact copy of the input
-  <id>/media/              images
+  <id>/media/              images (and unmapped-table-p<page>-<n>.png: tables whose symbols the PDF cannot name)
   <id>/conversion.json     tool, options, warnings, what was dropped (e.g. PDF page headers)
+  <id>/libreoffice.docx    only for a .doc: the copy LibreOffice made, which Pandoc read
   <id>/sections/           only with --split
 validation/
   summary.csv              one row per document, status per check
   <id>.md, <id>.json       the report
 ```
+
+The id mirrors the input folder: `input/SCC/My Spec.pdf` has the id `SCC/my-spec`, so its files are in `output/SCC/my-spec/` (with `my-spec.md`) and its report is `validation/SCC/my-spec.md`. A file directly in `input/`, and every web page from `sources.yaml`, has a plain id such as `ttml2`. Output made before this layout is moved into its new folder on the next run, with its front matter kept.
 
 Edit `title`, `spec_version` and `manual_fixes` in the front matter freely: they are kept when a document is converted again (`validated` is reset if the text changed).
 
@@ -135,13 +144,15 @@ docker compose -f deploy/docker-compose.yml up -d --build
 
 Caddy answers only the names and IPs in `SPECWEB_HOST`; anything else is refused. `SPECWEB_DEFAULT_SNI` makes `https://<IP>` work (browsers send no site name for an IP). `deploy/.env` belongs to one server and is git-ignored; without it, the site opens only as `https://localhost` on the server itself. Caddy makes its own certificate, so browsers warn until Caddy's root certificate is installed on them (or the Caddyfile uses the company's certificate). Changes to `deploy/.env` or the Caddyfile need only `docker compose -f deploy/docker-compose.yml up -d --force-recreate proxy`, no rebuild.
 
-The image contains Pandoc, Chromium and the pinned Docling models. Give the worker about 8 GB of memory per PDF conversion; `worker_concurrency` in `deploy/specweb.yaml` sets how many run at once.
+The image contains Pandoc, LibreOffice Writer and catdoc (for `.doc`), Chromium and the pinned Docling models. Give the worker about 8 GB of memory per PDF conversion; `worker_concurrency` in `deploy/specweb.yaml` sets how many run at once.
 
 Protections (settings in `specweb.yaml`): at most 20 files of 100 MB per job, file contents must match their extension; URLs that point at private, loopback or link-local addresses are refused, also after redirects and for page images (`fetch_allowlist` permits named internal hosts); at most 5 waiting jobs per client and 50 in total; new jobs are refused when free disk is low; jobs are deleted after 30 days (approved documents stay in the library); rendered Markdown is sanitized and HTML sources are shown sandboxed without scripts.
 
 ## What to expect from PDFs
 
 PDFs are converted with Docling, which is good but not perfect. Known limitations (details in `spec/deviations.md`): line breaks inside code are lost, headings all come out at the same level, text inside diagrams stays in the image, and a code line at a page break can be taken for a page footer (everything dropped as header or footer is listed in `conversion.json`). The validator is built to catch these, so a PDF report usually has items to review. PDFs without a text layer are reported as `no_text_layer` and not converted (no OCR).
+
+Some PDFs draw symbols with a font that has no Unicode map (EBU Tech 3264's code-page tables): the PDF holds each symbol's picture, not which character it is, so the text shows `�` or wrong letters. Such a table gets a note and a picture of it from the PDF directly underneath; use the picture as the reference. The validator lists those pages as "compare by eye" warnings instead of counting their lines as missing text.
 
 ## Development
 

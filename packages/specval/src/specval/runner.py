@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from common.frontmatter import FrontMatterError, parse_document
-from common.manifest import ManifestEntry
+from common.manifest import ManifestEntry, md_filename
 
 from specval import __version__
 from specval.checks import CHECKS as CORE_CHECKS
@@ -25,7 +25,7 @@ from specval.checks_more import check_v3, check_v5, check_v6, check_v8, check_v9
 from specval.config import AcceptanceQuestion, SpecvalConfig
 from specval.markdown import parse_markdown
 from specval.model import FAIL, CheckResult, Finding, overall
-from specval.reference import Reference, from_docx, from_html, from_pdf
+from specval.reference import Reference, from_doc, from_docx, from_html, from_pdf
 from specval.review import build_queue
 
 log = logging.getLogger("specval.runner")
@@ -35,7 +35,8 @@ CHECKS = (*CORE_CHECKS, check_v3, check_v5, check_v6, check_v8, check_v9)
 CHECK_ORDER = ("V1", "V2", "V3", "V4", "V5", "V6", "V7", "V8", "V9")
 # Manifest statuses that mean the Markdown exists and can be checked.
 CONVERTED = frozenset({"ok", "skipped_unchanged"})
-# Statuses that make the run exit 1; "unsupported" (.doc) does not (deviation V-o).
+# Statuses that make the run exit 1; "unsupported" does not (deviation V-o). Since
+# DOC1 nothing is unsupported any more, but old manifests may still say so.
 CONVERSION_FAILED = frozenset({"failed", "no_text_layer"})
 NOT_CONVERTED = "not_converted"
 
@@ -129,6 +130,10 @@ def load_reference(entry: ManifestEntry, source: Path, conversion: dict[str, Any
         )
     if suffix == ".docx":
         return from_docx(source)
+    if suffix == ".doc":
+        # LibreOffice's .docx, kept by the converter next to source.doc (DOC1).
+        docx_name = (conversion.get("libreoffice") or {}).get("docx") or "libreoffice.docx"
+        return from_doc(source, source.parent / docx_name)
     if suffix == ".pdf":
         return from_pdf(source)
     raise ValueError(f"no reference extraction for {source.name}")
@@ -158,7 +163,7 @@ def validate_document(
         )
         return report
     folder = output / entry.id
-    md_path = folder / f"{entry.id}.md"
+    md_path = folder / md_filename(entry.id)  # last part of the id (NL1)
     conversion: dict[str, Any] = {}
     try:
         conversion = json.loads((folder / "conversion.json").read_text(encoding="utf-8"))

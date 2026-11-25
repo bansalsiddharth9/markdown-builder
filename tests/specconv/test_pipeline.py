@@ -44,7 +44,8 @@ def convert(*extra: str):
 
 
 def md_path(doc_id: str) -> Path:
-    return Path("output") / doc_id / f"{doc_id}.md"
+    """output/<id>/<name>.md; name is the id's last part (ids mirror input folders, NL1)."""
+    return Path("output") / doc_id / f"{Path(doc_id).name}.md"
 
 
 def edit_front_matter(doc_id: str, **changes) -> None:
@@ -116,7 +117,7 @@ def test_subfolders_and_source_file(input_dir: Path) -> None:
     (input_dir / "w3c").mkdir()
     shutil.move(input_dir / "sample-spec.docx", input_dir / "w3c" / "Draft Spec v1.2.docx")
     assert convert().exit_code == 0
-    fm, _ = parse_document(md_path("draft-spec-v1-2").read_text(encoding="utf-8"))
+    fm, _ = parse_document(md_path("w3c/draft-spec-v1-2").read_text(encoding="utf-8"))
     assert fm.source_file == "w3c/Draft Spec v1.2.docx"
 
 
@@ -199,18 +200,20 @@ def test_failed_reconversion_keeps_previous_output(input_dir: Path) -> None:
 
 
 def test_unsupported_skipped_pdf_and_exit_code(input_dir: Path) -> None:
+    # Not a Word 97-2003 file: refused before LibreOffice, which would read it as text (DOC1).
     (input_dir / "legacy.doc").write_bytes(b"x")
     (input_dir / "notes.txt").write_text("x", encoding="utf-8")
     (input_dir / "broken.pdf").write_bytes(b"%PDF-1.4")
     result = convert()
     assert result.exit_code == 1  # the damaged PDF fails
     manifest = read_manifest(Path("output/manifest.json"))
-    assert manifest.get("legacy").status == "unsupported"
+    assert manifest.get("legacy").status == "failed"
     assert manifest.get("legacy").source_type == "doc"
+    assert "not a Word 97-2003 file" in manifest.get("legacy").error
     assert manifest.get("broken").status == "failed"
     assert "PDF cannot be read" in manifest.get("broken").error
     assert manifest.get("notes") is None
-    assert "skipped (not a PDF, HTML or DOCX file): notes.txt" in result.output
+    assert "skipped (not a PDF, HTML, DOCX or DOC file): notes.txt" in result.output
 
 
 def test_only_converts_one_and_keeps_other_entries(input_dir: Path) -> None:
@@ -263,10 +266,109 @@ def test_ids_unique_and_web_ids_reserved(tmp_path: Path) -> None:
     assert [(d.id, d.rel_path) for d in result.docs] == [
         ("a", "a.docx"),
         ("a-2", "a.html"),
-        ("a-3", "sub/a.pdf"),
+        ("sub/a", "sub/a.pdf"),  # its own folder, so no suffix (NL1)
         ("ttml2-2", "ttml2.html"),
         ("ttml2", None),
     ]
+
+
+# ------------------------------------- ids mirror the input folders (NL1)
+
+
+def test_ids_mirror_input_folders(tmp_path: Path) -> None:
+    folder = tmp_path / "in"
+    for rel in (
+        "MCC/MCC White Paper.pdf",
+        "DFXP/Timed Text (DFXP).htm",
+        "SMPTE2052/Timed Text (DFXP).htm",
+        "SMPTE2052/timed-text-dfxp.html",
+        "A/B/deep.docx",
+    ):
+        (folder / rel).parent.mkdir(parents=True, exist_ok=True)
+        (folder / rel).write_bytes(b"x")
+    result = scan(folder, [])
+    assert {d.rel_path: d.id for d in result.docs} == {
+        "A/B/deep.docx": "A/B/deep",
+        "DFXP/Timed Text (DFXP).htm": "DFXP/timed-text-dfxp",
+        "MCC/MCC White Paper.pdf": "MCC/mcc-white-paper",
+        # same name as the DFXP file, but another folder: no suffix
+        "SMPTE2052/Timed Text (DFXP).htm": "SMPTE2052/timed-text-dfxp",
+        "SMPTE2052/timed-text-dfxp.html": "SMPTE2052/timed-text-dfxp-2",
+    }
+
+
+def test_scan_moves_a_flat_previous_id_into_its_folder(tmp_path: Path) -> None:
+    """An id from before NL1 ("a-3" for sub/a.pdf) is replaced by the mirrored id;
+    previous_id tells the pipeline which old folder to move."""
+    folder = tmp_path / "in"
+    (folder / "sub").mkdir(parents=True)
+    for rel in ("sub/a.pdf", "sub/b.pdf", "c.html"):
+        (folder / rel).write_bytes(b"x")
+    result = scan(
+        folder, [], previous_ids={"sub/a.pdf": "a-3", "sub/b.pdf": "sub/b-2", "c.html": "c"}
+    )
+    assert [(d.id, d.previous_id) for d in result.docs] == [
+        ("c", None),  # unchanged
+        ("sub/a", "a-3"),  # moved
+        ("sub/b-2", None),  # already mirrored: kept as it is
+    ]
+
+
+def test_nested_input_mirrored_in_output(input_dir: Path) -> None:
+    sub = input_dir / "SCC Specs"
+    sub.mkdir()
+    shutil.move(input_dir / "sample-spec.docx", sub / "Sample Spec.docx")
+    result = convert()
+    assert result.exit_code == 0, result.output
+    doc_dir = Path("output/SCC Specs/sample-spec")
+    assert sorted(p.name for p in doc_dir.iterdir()) == [
+        "conversion.json",
+        "media",
+        "sample-spec.md",
+        "source.docx",
+    ]
+    assert read_manifest(Path("output/manifest.json")).get("SCC Specs/sample-spec").status == "ok"
+    assert not list(Path("output").glob("**/.*.tmp"))  # build folders cleaned up
+    # The second run finds the nested output and skips it.
+    again = read_manifest(Path("output/manifest.json")) if convert().exit_code == 0 else None
+    assert again is not None and again.get("SCC Specs/sample-spec").status == "skipped_unchanged"
+
+
+def test_new_file_never_reuses_a_leftover_nested_folder(input_dir: Path) -> None:
+    (input_dir / "SCC").mkdir()
+    shutil.move(input_dir / "sample-spec.docx", input_dir / "SCC" / "sample-spec.docx")
+    assert convert().exit_code == 0
+    Path("output/manifest.json").unlink()  # e.g. deleted by hand
+    assert convert().exit_code == 0
+    manifest = read_manifest(Path("output/manifest.json"))
+    assert manifest.get("SCC/sample-spec-2").source == "SCC/sample-spec.docx"
+
+
+def test_old_flat_output_moved_into_its_folder(input_dir: Path) -> None:
+    """Output from before NL1 is moved, not converted next to a leftover copy, so
+    hand-edited front matter is kept."""
+    assert convert().exit_code == 0
+    edit_front_matter(DOCX_ID, title="Edited by hand")
+    # Pretend the old run saw the DOCX in a subfolder and gave it a flat id.
+    (input_dir / "SCC").mkdir()
+    shutil.move(input_dir / "sample-spec.docx", input_dir / "SCC" / "sample-spec.docx")
+    manifest_file = Path("output/manifest.json")
+    data = json.loads(manifest_file.read_text(encoding="utf-8"))
+    for entry in data["documents"]:
+        if entry["id"] == DOCX_ID:
+            entry["source"] = "SCC/sample-spec.docx"
+    manifest_file.write_text(json.dumps(data), encoding="utf-8")
+    fm, body = parse_document(md_path(DOCX_ID).read_text(encoding="utf-8"))
+    fm.source_file = "SCC/sample-spec.docx"
+    md_path(DOCX_ID).write_text(render_document(fm, body), encoding="utf-8")
+
+    result = convert()
+    assert result.exit_code == 0, result.output
+    assert not (Path("output") / DOCX_ID).exists()
+    fm, _ = parse_document(md_path("SCC/sample-spec").read_text(encoding="utf-8"))
+    assert fm.id == "SCC/sample-spec"
+    assert fm.title == "Edited by hand"
+    assert read_manifest(manifest_file).get("SCC/sample-spec").status == "ok"
 
 
 # ------------------------------------------------------------ stable ids

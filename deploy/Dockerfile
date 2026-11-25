@@ -9,8 +9,12 @@ ENV PYTHONUNBUFFERED=1 \
 
 # libatomic1: Playwright's bundled Node.js needs it before `playwright install --with-deps`
 # can install Chromium's other libraries; the slim base image does not ship it.
+# libreoffice-writer-nogui (MPL-2.0) saves .doc files as .docx for specconv, and
+# catdoc (GPL-2.0) reads their text independently for specval (deviation DOC1);
+# both run as separate programs.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends ca-certificates curl libatomic1 \
+      libreoffice-writer-nogui catdoc \
  && rm -rf /var/lib/apt/lists/*
 
 # Pandoc 3.14 (GPL-2.0, run as a separate program).

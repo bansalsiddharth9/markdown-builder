@@ -17,6 +17,7 @@ import os
 from pathlib import Path
 
 from common.frontmatter import parse_document, render_document
+from common.manifest import md_filename
 
 from specval import __version__
 from specval.runner import body_sha256
@@ -50,7 +51,7 @@ def approve(
         ) from exc
     if report.get("overall") == "not_converted":
         raise ApproveError(f"{doc_id} was not converted; there is nothing to approve")
-    md_path = output / doc_id / f"{doc_id}.md"
+    md_path = output / doc_id / md_filename(doc_id)  # last part of the id (NL1)
     data = md_path.read_bytes()
     # Body only, so front matter edits (title, spec_version) after validation
     # do not block approval (deviation WB11).

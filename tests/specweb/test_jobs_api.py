@@ -58,7 +58,7 @@ def test_url_job_fetches_first(client, fake_runner, tmp_path: Path) -> None:
     "kwargs, message",
     [
         ({}, "no files or URLs"),
-        ({"files": [("notes.txt", b"x")]}, "notes.txt: only .pdf, .html, .htm and .docx"),
+        ({"files": [("notes.txt", b"x")]}, "notes.txt: only .pdf, .html, .htm, .docx and .doc"),
         ({"urls": [{"url": "ftp://x.org/a"}]}, "must start with http:// or https://"),
         ({"urls": [{"url": "https://x.org/", "render": "magic"}]}, "render must be"),
         ({"files": [("a.pdf", PDF)], "split": "9"}, "split must be"),

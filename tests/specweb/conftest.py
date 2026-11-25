@@ -38,6 +38,7 @@ class FakeRunner:
         self.fail_step: str | None = None  # "fetch" | "convert" | "run": exit code 2
         self.timeout_step: str | None = None
         self.validation = "pass"
+        self.doc_docx: bytes | None = None  # LibreOffice's copy written for a .doc
 
     def __call__(self, args: list[str], timeout: float, log_path: Path) -> int:
         from specweb.worker import StepTimeout
@@ -78,6 +79,9 @@ class FakeRunner:
             (folder / "media").mkdir(exist_ok=True)
             (folder / "media" / "fig.png").write_bytes(b"\x89PNG fake")
             (folder / f"source{path.suffix}").write_bytes(path.read_bytes())
+            if path.suffix == ".doc" and self.doc_docx is not None:
+                # specconv keeps LibreOffice's .docx next to source.doc (DOC1).
+                (folder / "libreoffice.docx").write_bytes(self.doc_docx)
             entries.append(
                 ManifestEntry(id=doc_id, source=path.name, source_type=path.suffix[1:],
                               status="ok", converter="pandoc")

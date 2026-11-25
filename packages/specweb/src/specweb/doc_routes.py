@@ -181,6 +181,11 @@ def document_page(request: Request, job_id: str, doc_id: str, tab: str = "render
         context["lines"] = list(enumerate(text.split("\n"), start=1))
     if tab == "side-by-side" and source is not None and source.suffix == ".docx":
         context["docx_preview"] = docx_preview(source)
+    if tab == "side-by-side" and source is not None and source.suffix == ".doc":
+        # Pandoc cannot read .doc: preview the .docx LibreOffice made from it (DOC1).
+        lo_copy = source.parent / documents.DOC_DOCX_NAME
+        if lo_copy.is_file():
+            context["docx_preview"] = docx_preview(lo_copy)
     if tab == "report":
         report_md = ref.validation / f"{doc_id}.md"
         context["report_html"] = (

@@ -11,6 +11,7 @@ dependencies = [
     "lxml==6.1.3",
     "playwright==1.65.2",
     "pypdf==7.1.1",
+    "pypdfium2==5.15.2",  # unmapped-font characters in PDF tables (Q23); also used by Docling
     "pyyaml==6.0.3",
     "soupsieve==4.1.2",
     "torch==2.15.0",

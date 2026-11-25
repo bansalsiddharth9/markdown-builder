@@ -91,7 +91,7 @@ def test_split_without_front_matter() -> None:
         ("---\nid: [unclosed\n---\n", "not valid YAML"),
         ("---\ntitle: x\n---\n", "missing 'id'"),
         ("---\nid: x\ncolour: red\n---\n", "unknown fields"),
-        ("---\nid: x\nsource_type: doc\n---\n", "source_type"),
+        ("---\nid: x\nsource_type: rtf\n---\n", "source_type"),
         ("---\nid: x\nflags: mixed\n---\n", "flags"),
         ("---\nid: x\nvalidated: yes\n---\n", "validated"),
     ],

@@ -26,7 +26,7 @@ input/ + config/sources.yaml
    │  specconv convert   (route each file: pdf→Docling, html/docx→Pandoc; HTML is cleaned
    │                      first in htmlprep.py; post-processing in postprocess.py)
    ▼
-output/<id>/<id>.md, media/, source.<ext>, conversion.json; output/manifest.json
+output/<id>/<name>.md, media/, source.<ext>, conversion.json; output/manifest.json
    │  specval run        (re-reads the SOURCE independently, compares, writes reports)
    ▼
 validation/<id>.md|.json, summary.csv
@@ -103,5 +103,11 @@ uv run specweb worker --config deploy/specweb.yaml
   (converter) or html5lib (validator).
 - **Tests never touch the network** (a fixture blocks it). Web tests use a local HTTP server.
   The specweb tests use a fake runner instead of Docling and Pandoc.
-- **`.doc` files are not supported.** Convert them to `.docx` with LibreOffice
-  (`/usr/bin/soffice --headless --convert-to docx`).
+- **`.doc` files go through LibreOffice** (`converters/libreoffice.py`, DOC1): it saves a
+  `.docx` that Pandoc converts. The validator takes headings and tables from that `.docx`,
+  but V3's text from **catdoc** reading the original `.doc`, to stay independent. LibreOffice
+  garbles a table that ends a document when it *writes* `.doc`, so test fixtures add a final
+  paragraph first.
+- **Ids mirror the input folders** (NL1): `input/SCC/x.pdf` → id `SCC/x` →
+  `output/SCC/x/x.md`. Use `common.manifest.md_filename(id)` for the file name, never
+  `f"{id}.md"`. Web jobs and `sources.yaml` pages still have plain ids.

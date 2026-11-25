@@ -41,7 +41,10 @@ MEDIA_TYPES = {
     ".html": "text/html; charset=utf-8",
     ".htm": "text/html; charset=utf-8",
     ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    ".doc": "application/msword",
 }
+# For a .doc, specconv keeps LibreOffice's .docx here; the page previews it (DOC1).
+DOC_DOCX_NAME = "libreoffice.docx"
 
 
 @dataclass(frozen=True)
