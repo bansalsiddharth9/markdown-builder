@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import json
+import re
 import zipfile
 from pathlib import Path
 
@@ -226,3 +227,32 @@ def test_library_page(client, doc) -> None:
     page = client.get("/library").text
     assert "Spec A title" in page and "Ben" in page and "/library/spec-a/1/spec-a.md" in page
     assert client.get("/library/spec-a/1/spec-a.md").text.startswith("---\n")
+
+
+# ------------------------------------------- fold-out sections (deviation WB17)
+
+
+def test_report_tab_one_closed_section_per_check_with_findings(client, fake_runner) -> None:
+    fake_runner.validation = "fail"
+    job = upload(client, files=[("b.pdf", PDF)]).json()
+    page = client.get(f"/documents/{job['id']}/b?tab=report").text
+    # The results table lists every check.
+    assert "<td>Validation1</td>" in page and "<td>Validation7</td>" in page
+    sections = re.findall(r"<details class=\"check-findings\"[^>]*>(.*?)</details>", page, re.S)
+    assert len(sections) == 1  # Validation1 has no findings: nothing to open
+    assert "Validation7" in sections[0] and "1 finding" in sections[0]
+    assert "image file missing: media/x.png" in sections[0]
+    assert f"/api/documents/{job['id']}/b/source#page=2" in sections[0]
+    assert not re.search(r"<details class=\"check-findings\"[^>]*\bopen\b", page)
+
+
+def test_review_tab_groups_items_in_closed_sections(client, fake_runner) -> None:
+    fake_runner.validation = "fail"
+    job = upload(client, files=[("b.pdf", PDF)]).json()
+    page = client.get(f"/documents/{job['id']}/b?tab=review").text
+    groups = re.findall(r"<details class=\"queue-group\"[^>]*>(.*?)</details>", page, re.S)
+    assert len(groups) == 2
+    assert "Validation7" in groups[0] and "1 item" in groups[0] and "1 fail" in groups[0]
+    assert 'data-kind="fail"' in groups[0]
+    assert "Random sample" in groups[1] and "page 1: compare" in groups[1]
+    assert not re.search(r"<details class=\"queue-group\"[^>]*\bopen\b", page)

@@ -124,6 +124,80 @@ def read_report(ref: DocRef) -> dict[str, Any] | None:
         return None
 
 
+def _plural(n: int, word: str) -> str:
+    """ "1 item", "3 items"."""
+    return f"{n} {word}" if n == 1 else f"{n} {word}s"
+
+
+def check_sections(report: dict[str, Any] | None) -> list[dict[str, Any]]:
+    """The report's checks that have findings, in report order, for the Report
+    tab's fold-out sections (deviation WB17): id, name, status, a count line
+    such as "3 findings (2 fail, 1 warn)" and the findings themselves."""
+    sections = []
+    for check in (report or {}).get("checks", []):
+        findings = check.get("findings") or []
+        if not findings:
+            continue
+        counts = [
+            _plural(n, severity) if severity == "fail" else f"{n} {severity}"
+            for severity in ("fail", "warn", "info")
+            if (n := sum(1 for f in findings if f.get("severity") == severity))
+        ]
+        sections.append(
+            {
+                "id": check.get("id"),
+                "name": check.get("name", ""),
+                "status": check.get("status", ""),
+                "count": _plural(len(findings), "finding")
+                + (f" ({', '.join(counts)})" if len(counts) > 1 else ""),
+                "findings": findings,
+            }
+        )
+    return sections
+
+
+# Review queue items without a check, grouped after the checks (design: Review queue).
+_KIND_GROUPS = {"table": "Tables to check (always reviewed)", "sample": "Random sample"}
+
+
+def queue_groups(report: dict[str, Any] | None) -> list[dict[str, Any]]:
+    """The review queue grouped for the Review tab's fold-out sections (WB17):
+    one group per check (in the report's check order), then the always-reviewed
+    tables and the random sample. Each group: title, a count line such as
+    "4 items (1 fail, 3 warn)" and its items, in queue order."""
+    report = report or {}
+    names = {c.get("id"): c.get("name", "") for c in report.get("checks", [])}
+    order = list(names)
+    groups: dict[str, list[dict[str, Any]]] = {}
+    for item in report.get("review_queue", []):
+        key = item.get("check") or _KIND_GROUPS.get(item.get("kind"), item.get("kind") or "")
+        groups.setdefault(key, []).append(item)
+
+    def rank(key: str) -> tuple[int, int]:
+        """Checks first in report order, then tables, then samples."""
+        if key in names:
+            return (0, order.index(key))
+        kinds = list(_KIND_GROUPS.values())
+        return (1, kinds.index(key) if key in kinds else len(kinds))
+
+    out = []
+    for key in sorted(groups, key=rank):
+        items = groups[key]
+        fails = sum(1 for i in items if i.get("kind") == "fail")
+        warns = sum(1 for i in items if i.get("kind") == "warn")
+        parts = [
+            p for p in (f"{fails} fail" if fails else "", f"{warns} warn" if warns else "") if p
+        ]
+        out.append(
+            {
+                "title": f"{key} · {names[key]}" if names.get(key) else key,
+                "count": _plural(len(items), "item") + (f" ({', '.join(parts)})" if parts else ""),
+                "items": items,
+            }
+        )
+    return out
+
+
 def details(ref: DocRef) -> dict[str, Any]:
     """The document's record plus its front matter and a validation summary
     (overall, date, status per check). Used by the API and the Document page.

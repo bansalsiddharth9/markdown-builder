@@ -159,6 +159,18 @@ pre.raw .ln { display: inline-block; width: 4em; color: #5f5f67; user-select: no
 ol.queue { padding-left: 1.5rem; }
 ol.queue li { margin: .5rem 0; padding: .6rem .8rem; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; }
 ol.queue blockquote { margin: .35rem 0 0 1.5rem; color: var(--muted); }
+/* Report and Review tabs: one fold-out per check, closed by default (WB17) */
+table.checks { margin-bottom: 1rem; }
+details.check-findings, details.queue-group {
+  margin: .5rem 0; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
+}
+details.check-findings > summary, details.queue-group > summary { cursor: pointer; padding: .6rem .8rem; }
+details.check-findings > summary:hover, details.queue-group > summary:hover { background: var(--panel-2); }
+details.check-findings .count, details.queue-group .count { color: var(--muted); margin-left: .4rem; }
+details.check-findings ol { padding: 0 1rem .6rem 2.2rem; }
+details.check-findings li { margin: .45rem 0; }
+details.check-findings blockquote { margin: .3rem 0 0 1rem; color: var(--muted); }
+details.queue-group ol.queue { padding: 0 .8rem .4rem 2.2rem; }
 .kind { font-size: .7rem; text-transform: uppercase; letter-spacing: .03em; padding: .05rem .4rem; border-radius: 4px; background: #26262b; color: #c4c4ca; }
 .k-fail { background: rgba(240, 128, 106, .14); color: var(--fail); }
 .k-warn { background: rgba(242, 177, 76, .14); color: var(--warn); }

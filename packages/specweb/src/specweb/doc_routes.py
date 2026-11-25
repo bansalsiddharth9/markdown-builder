@@ -168,6 +168,9 @@ def document_page(request: Request, job_id: str, doc_id: str, tab: str = "render
         "tabs": TABS,
         "report": report,
         "queue": (report or {}).get("review_queue", []),
+        # Fold-out sections on the Report and Review tabs, closed by default (WB17).
+        "check_sections": documents.check_sections(report),
+        "queue_groups": documents.queue_groups(report),
         # Approve starts disabled if there are fail items; review.js enables it (WB10).
         "fail_items": sum(1 for i in (report or {}).get("review_queue", []) if i["kind"] == "fail"),
         "source_kind": source.suffix.lstrip(".") if source else None,
@@ -186,11 +189,6 @@ def document_page(request: Request, job_id: str, doc_id: str, tab: str = "render
         lo_copy = source.parent / documents.DOC_DOCX_NAME
         if lo_copy.is_file():
             context["docx_preview"] = docx_preview(lo_copy)
-    if tab == "report":
-        report_md = ref.validation / f"{doc_id}.md"
-        context["report_html"] = (
-            render_markdown(report_md.read_text(encoding="utf-8")) if report_md.is_file() else None
-        )
     return templates.TemplateResponse(request, "document.html", context)
 
 
